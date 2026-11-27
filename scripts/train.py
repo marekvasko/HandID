@@ -93,7 +93,8 @@ def main(cfg: DictConfig) -> None:
                          weight_decay=m.weight_decay, warmup_epochs=m.warmup_epochs, layer_decay=m.layer_decay,
                          timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None,
                          metadata_classes={a: len(c) for a, c in METADATA.items()} if use_metadata else None,
-                         metadata_weight=cfg.variant.get("metadata_weight", 0.1))
+                         metadata_weight=cfg.variant.get("metadata_weight", 0.1),
+                         pooling=m.get("pooling", "global"), grid=m.get("grid", 4))
     if cfg.train.epochs > 0:
         metadata = metadata_targets(train_df, Path(cfg.paths.external_dir) / "11k" / "HandInfo.csv") \
             if use_metadata else None

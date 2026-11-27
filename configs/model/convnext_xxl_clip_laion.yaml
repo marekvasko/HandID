@@ -1,0 +1,11 @@
+# OpenCLIP ConvNeXt-XXL image tower (846 M), LAION-2B. Zero-shot only.
+name: convnext_xxl_clip_laion
+backbone: convnext_xxlarge.clip_laion2b_soup
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 1.0e-05
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

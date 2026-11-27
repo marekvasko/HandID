@@ -1,0 +1,11 @@
+# OpenCLIP ConvNeXt-B image tower (88 M), LAION-2B.
+name: convnext_b_clip_laion
+backbone: convnext_base.clip_laion2b_augreg
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 5.0e-05
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

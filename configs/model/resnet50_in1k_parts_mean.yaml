@@ -1,0 +1,13 @@
+# resnet50.a1_in1k with local part features (4x4 grid of the last feature map) fused by mean. See PartFusion in model.py.
+name: resnet50_in1k_parts_mean
+backbone: resnet50.a1_in1k
+pooling: parts_mean
+grid: 4
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 2.0e-04
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

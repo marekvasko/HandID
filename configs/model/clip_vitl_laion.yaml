@@ -1,0 +1,13 @@
+# OpenCLIP ViT-L/14 image tower (304 M), LAION-2B.
+name: clip_vitl_laion
+backbone: vit_large_patch14_clip_224.laion2b
+timm_kwargs:
+  img_size: ${train.image_size}   # pre-trained at 224, position embeddings interpolated
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 1.0e-05
+layer_decay: 0.8       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1
