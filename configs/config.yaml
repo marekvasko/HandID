@@ -20,6 +20,7 @@ train:
   balance_power: 0.5       # identity balancing of the sampler, see data.py
   num_workers: 6            # only memcpy from the image bank; augmentation runs on the GPU
   precision: bf16-mixed
+  limit_train_batches: 1.0  # e.g. 20 for a quick smoke test
 
 eval:
   batch_size: 128

@@ -1,0 +1,9 @@
+# @package _global_
+# ours + 11k + HD, plus auxiliary heads that predict 11k metadata (gender, skin colour,
+# accessories, nail polish, age bin) from the embedding. See issue #5.
+variant:
+  name: ours_external_meta
+  labels: identity
+  datasets: [ours, 11k, hd]
+  metadata: true
+  metadata_weight: 0.1

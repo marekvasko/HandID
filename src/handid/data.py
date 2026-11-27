@@ -71,19 +71,53 @@ def load_manifests(manifest_dir: str, bank_dir: str, input_name: str, aligned_di
 
 
 class BankImages(Dataset):
-    """Rows of a manifest -> (uint8 HWC image, class index). Class index is -1 for test data."""
+    """Rows of a manifest -> (uint8 HWC image, class index, metadata targets).
 
-    def __init__(self, df: pd.DataFrame, banks: dict[str, np.ndarray], labels: list[int] | None = None):
+    Class index is -1 for test data; metadata targets are -1 where unknown (see METADATA).
+    """
+
+    def __init__(self, df: pd.DataFrame, banks: dict[str, np.ndarray], labels: list[int] | None = None,
+                 metadata: np.ndarray | None = None):
         self.banks = banks
         self.rows = list(zip(df["dataset"], df["bank_row"]))
         self.labels = labels if labels is not None else [-1] * len(df)
+        self.metadata = metadata if metadata is not None else np.full((len(df), len(METADATA)), -1)
 
     def __len__(self) -> int:
         return len(self.rows)
 
     def __getitem__(self, i: int):
         ds, row = self.rows[i]
-        return torch.from_numpy(np.array(self.banks[ds][row])), self.labels[i]
+        return torch.from_numpy(np.array(self.banks[ds][row])), self.labels[i], torch.from_numpy(self.metadata[i])
+
+
+# ---------------------------------------------------------------------------------------------
+# Metadata (only 11k Hands has it) - used as auxiliary prediction targets, see issue #5
+# ---------------------------------------------------------------------------------------------
+METADATA = {  # attribute -> class names; 11k ages are mostly 21-22, hence the narrow bins
+    "gender": ["female", "male"],
+    "skinColor": ["very fair", "fair", "medium", "dark"],
+    "accessories": ["0", "1"],
+    "nailPolish": ["0", "1"],
+    "age": ["<=20", "21", "22", ">=23"],
+}
+
+
+def _age_bin(age: str) -> str:
+    a = int(age)
+    return "<=20" if a <= 20 else ">=23" if a >= 23 else str(a)
+
+
+def metadata_targets(df: pd.DataFrame, handinfo_csv: str) -> np.ndarray:
+    """(N, len(METADATA)) int64 class indices; -1 for rows without metadata (ours, hd)."""
+    info = pd.read_csv(handinfo_csv, dtype=str).set_index("imageName")
+    info["age"] = info["age"].map(_age_bin)
+    out = np.full((len(df), len(METADATA)), -1, dtype=np.int64)
+    is_11k = (df["dataset"] == "11k").to_numpy()
+    rows = info.loc[df.loc[is_11k, "src_path"].map(lambda p: Path(p).name)]
+    for k, (attr, classes) in enumerate(METADATA.items()):
+        out[is_11k, k] = rows[attr].map({c: i for i, c in enumerate(classes)}).fillna(-1).to_numpy()
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -155,9 +189,9 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
 # ---------------------------------------------------------------------------------------------
 class HandDataModule(L.LightningDataModule):
     def __init__(self, train_df: pd.DataFrame, banks: dict[str, np.ndarray], image_size: int, batch_size: int,
-                 num_workers: int, balance_power: float):
+                 num_workers: int, balance_power: float, metadata: np.ndarray | None = None):
         super().__init__()
-        self.train_df, self.banks = train_df, banks
+        self.train_df, self.banks, self.metadata = train_df, banks, metadata
         self.classes = sorted(train_df["label"].unique())
         self.class_index = {c: i for i, c in enumerate(self.classes)}
         self.batch_size, self.num_workers, self.balance_power = batch_size, num_workers, balance_power
@@ -165,7 +199,7 @@ class HandDataModule(L.LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         labels = [self.class_index[c] for c in self.train_df["label"]]
-        ds = BankImages(self.train_df, self.banks, labels)
+        ds = BankImages(self.train_df, self.banks, labels, self.metadata)
         # Each image is drawn with probability ~ 1 / n_images(class)^power.
         # power=0: plain shuffling, power=1: every class equally often. 0.5 is a compromise
         # that keeps heavily recorded hands from dominating without over-sampling tiny ones.
@@ -175,10 +209,10 @@ class HandDataModule(L.LightningDataModule):
                           pin_memory=True, drop_last=True, persistent_workers=True)
 
     def on_after_batch_transfer(self, batch, dataloader_idx: int):
-        images, labels = batch
+        images, labels, metadata = batch
         if self.trainer.training:
             images = self.augment(images)
-        return images, labels
+        return images, labels, metadata
 
 
 def eval_loader(df: pd.DataFrame, banks: dict[str, np.ndarray], batch_size: int, num_workers: int) -> DataLoader:

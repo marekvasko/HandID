@@ -63,26 +63,39 @@ class HandEmbedder(nn.Module):
 class HandIDModule(L.LightningModule):
     def __init__(self, num_classes: int, backbone: str, embedding_dim: int | None, arcface_scale: float,
                  arcface_margin: float, lr_backbone: float, lr_head: float, weight_decay: float,
-                 warmup_epochs: int, layer_decay: float = 1.0, timm_kwargs: dict | None = None):
+                 warmup_epochs: int, layer_decay: float = 1.0, timm_kwargs: dict | None = None,
+                 metadata_classes: dict[str, int] | None = None, metadata_weight: float = 0.1):
         super().__init__()
         self.save_hyperparameters()
         self.net = HandEmbedder(backbone, embedding_dim, timm_kwargs=timm_kwargs)
         self.loss = ArcFace(self.net.dim, max(num_classes, 1), arcface_scale, arcface_margin)
+        # Optional auxiliary heads: predict metadata (gender, skin colour, ...) from the embedding.
+        self.metadata_heads = nn.ModuleDict({attr: nn.Linear(self.net.dim, n)
+                                             for attr, n in (metadata_classes or {}).items()})
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.normalize(self.net(x).float(), dim=1)
 
     def training_step(self, batch, _):
-        images, labels = batch
-        loss, cos = self.loss(self.net(images), labels)
-        acc = (cos.argmax(1) == labels).float().mean()
-        self.log_dict({"train/loss": loss, "train/acc": acc}, prog_bar=True, on_step=True, on_epoch=True)
+        images, labels, metadata = batch
+        emb = self.net(images)
+        loss, cos = self.loss(emb, labels)
+        logs = {"train/arcface": loss, "train/acc": (cos.argmax(1) == labels).float().mean()}
+        for k, (attr, head) in enumerate(self.metadata_heads.items()):
+            known = metadata[:, k] >= 0
+            if known.any():  # only 11k rows carry metadata
+                aux = F.cross_entropy(head(emb[known]).float(), metadata[known, k])
+                loss = loss + self.hparams.metadata_weight * aux
+                logs[f"train/meta_{attr}"] = aux
+        logs["train/loss"] = loss
+        self.log_dict(logs, prog_bar=False, on_step=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
         hp = self.hparams
         param_groups = self._backbone_param_groups(hp.lr_backbone, hp.layer_decay, hp.weight_decay)
-        param_groups.append({"params": [*self.net.head.parameters(), *self.loss.parameters()],
+        param_groups.append({"params": [*self.net.head.parameters(), *self.loss.parameters(),
+                                        *self.metadata_heads.parameters()],
                              "lr": hp.lr_head, "weight_decay": hp.weight_decay})
         opt = torch.optim.AdamW(param_groups)
         total = self.trainer.estimated_stepping_batches

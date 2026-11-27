@@ -24,7 +24,8 @@ from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
 from handid import protocols
-from handid.data import HandDataModule, describe, eval_loader, eval_transform, load_manifests, split_train_test
+from handid.data import (METADATA, HandDataModule, describe, eval_loader, eval_transform, load_manifests,
+                         metadata_targets, split_train_test)
 from handid.model import HandIDModule
 
 
@@ -32,7 +33,7 @@ from handid.model import HandIDModule
 def embed(model: HandIDModule, df: pd.DataFrame, banks: dict, cfg: DictConfig) -> np.ndarray:
     model.eval().cuda()
     out = []
-    for images, _ in eval_loader(df, banks, cfg.eval.batch_size, cfg.train.num_workers):
+    for images, _, _ in eval_loader(df, banks, cfg.eval.batch_size, cfg.train.num_workers):
         images = eval_transform(images.cuda(non_blocking=True), cfg.train.image_size)
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out.append(model(images).cpu())
@@ -84,18 +85,23 @@ def main(cfg: DictConfig) -> None:
                               "n_train_images": len(train_df), "n_train_classes": train_df["label"].nunique()})
 
     # ---- model + training -------------------------------------------------------------------
+    use_metadata = cfg.variant.get("metadata", False)
     m = cfg.model
     model = HandIDModule(num_classes=train_df["label"].nunique(), backbone=m.backbone,
                          embedding_dim=m.embedding_dim, arcface_scale=m.arcface_scale,
                          arcface_margin=m.arcface_margin, lr_backbone=m.lr_backbone, lr_head=m.lr_head,
                          weight_decay=m.weight_decay, warmup_epochs=m.warmup_epochs, layer_decay=m.layer_decay,
-                         timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None)
+                         timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None,
+                         metadata_classes={a: len(c) for a, c in METADATA.items()} if use_metadata else None,
+                         metadata_weight=cfg.variant.get("metadata_weight", 0.1))
     if cfg.train.epochs > 0:
+        metadata = metadata_targets(train_df, Path(cfg.paths.external_dir) / "11k" / "HandInfo.csv") \
+            if use_metadata else None
         data = HandDataModule(train_df, banks, cfg.train.image_size, cfg.train.batch_size, cfg.train.num_workers,
-                              cfg.train.balance_power)
+                              cfg.train.balance_power, metadata)
         trainer = L.Trainer(max_epochs=cfg.train.epochs, precision=cfg.train.precision, logger=logger,
                             enable_checkpointing=False, log_every_n_steps=20, default_root_dir=out_dir,
-                            gradient_clip_val=1.0)
+                            gradient_clip_val=1.0, limit_train_batches=cfg.train.limit_train_batches)
         trainer.fit(model, datamodule=data)
     if cfg.save_model:
         torch.save({"state_dict": model.net.state_dict(), "config": OmegaConf.to_container(cfg, resolve=True)},
