@@ -24,7 +24,7 @@ from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
 from handid import protocols
-from handid.data import HandDataModule, describe, eval_loader, eval_transform, load_manifests, split_train_test
+from handid.data import HandDataModule, describe, eval_loader, load_manifests, split_train_test, to_float
 from handid.model import HandIDModule
 
 
@@ -32,8 +32,8 @@ from handid.model import HandIDModule
 def embed(model: HandIDModule, df: pd.DataFrame, banks: dict, cfg: DictConfig) -> np.ndarray:
     model.eval().cuda()
     out = []
-    for images, _ in eval_loader(df, banks, cfg.eval.batch_size, cfg.train.num_workers):
-        images = eval_transform(images.cuda(non_blocking=True), cfg.train.image_size)
+    for images, _ in eval_loader(df, banks, cfg.train.image_size, cfg.eval.batch_size, cfg.train.num_workers):
+        images = to_float(images.cuda(non_blocking=True))
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out.append(model(images).cpu())
     return torch.cat(out).numpy()
