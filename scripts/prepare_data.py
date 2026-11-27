@@ -1,6 +1,7 @@
-"""Step 1: prepare all data (one-off, ~15 min).
+"""Step 1: prepare all data (one-off, ~15 min; HaGRID another ~1 h).
 
     uv run scripts/prepare_data.py
+    uv run scripts/prepare_data.py datasets=[hagrid]   # only (re)build one dataset
 
 Produces in ``paths.data_dir``:
     external/            unpacked 11k Hands + HD archives
@@ -69,6 +70,29 @@ def align_manifest(df: pd.DataFrame, cfg: DictConfig) -> pd.DataFrame:
     return df
 
 
+def align_hagrid(df: pd.DataFrame, cfg: DictConfig) -> pd.DataFrame:
+    """Crop HaGRID with its annotated landmarks (no MediaPipe detection, see align.align_annotated_one).
+
+    Crops are named after the source image (``<identity>/<gesture>_<uuid>.jpg``), not the row
+    number, so re-running after more images were downloaded reuses every existing crop.
+    """
+    out_root = Path(cfg.paths.aligned_dir) / "hagrid"
+    df = df.copy()
+    df["path"] = [str(out_root / r.identity / f"{r.session}_{Path(r.src_path).name}") for r in df.itertuples()]
+    df["align"] = "annotation"
+    todo = [(r.src_path, r.path, r.landmarks, r.side) for r in df.itertuples() if not Path(r.path).exists()]
+    if todo:
+        init_args = (cfg.paths.hand_landmarker, cfg.align.out_size, cfg.align.margin)
+        with Pool(cfg.align.workers, initializer=align.init_worker, initargs=init_args) as pool:
+            results = list(tqdm(pool.imap(align.align_annotated_one, todo, chunksize=8), total=len(todo),
+                                desc="align hagrid"))
+        failed = {job[1] for job, method in zip(todo, results) if method.startswith("error")}
+        if failed:
+            print(f"dropping {len(failed)} unreadable images")
+            df = df[~df["path"].isin(failed)]
+    return df.drop(columns="landmarks")
+
+
 def mask_manifest(df: pd.DataFrame, cfg: DictConfig) -> None:
     """Write a background-masked copy of every aligned crop to ``<aligned_dir>_masked``."""
     src_root, dst_root = cfg.paths.aligned_dir, cfg.paths.aligned_dir + "_masked"
@@ -92,11 +116,13 @@ def main(cfg: DictConfig) -> None:
                                              Path(__file__).resolve().parents[1] / "configs" / "label_fixes.yaml"),
         "11k": lambda: manifests.build_11k(Path(cfg.paths.external_dir), cfg.external_test_fraction, cfg.seed),
         "hd": lambda: manifests.build_hd(Path(cfg.paths.external_dir), cfg.external_test_fraction, cfg.seed),
+        "hagrid": lambda: manifests.build_hagrid(Path(cfg.paths.hagrid_dir), cfg.hagrid_test_fraction, cfg.seed),
     }
     out_dir = Path(cfg.paths.manifest_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, build in builders.items():
-        df = align_manifest(build(), cfg)
+    for name in cfg.datasets:
+        df = builders[name]()
+        df = align_hagrid(df, cfg) if name == "hagrid" else align_manifest(df, cfg)
         df.to_csv(out_dir / f"{name}.csv", index=False)
         print(f"[{name}] {len(df)} images, {df.subject.nunique()} subjects, {df.identity.nunique()} identities")
         print(df["align"].value_counts(normalize=True).round(3).to_string())

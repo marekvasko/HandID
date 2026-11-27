@@ -69,6 +69,15 @@ def git_dirty() -> str:
         return "unknown"
 
 
+def init_from_saved_model(model: HandIDModule, path: str) -> None:
+    """Start from the backbone + embedding head of an earlier run (``save_model=true``), e.g. stage 2
+    of the HaGRID pre-training (issue #8). The ArcFace class centres are not copied: the classes of
+    the new training set are different people, so they start from scratch as usual."""
+    state_dict = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
+    model.net.load_state_dict(state_dict, strict=True)
+    print(f"initialised backbone + head from {path}")
+
+
 @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed)
@@ -78,7 +87,8 @@ def main(cfg: DictConfig) -> None:
     # ---- data -------------------------------------------------------------------------------
     manifests, banks = load_manifests(cfg.paths.manifest_dir, cfg.paths.bank_dir, cfg.input.name,
                                       cfg.paths.aligned_dir)
-    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold, cfg.variant.labels)
+    uses_hagrid = "hagrid" in cfg.variant.datasets or "hagrid" in str(cfg.model.get("init_from") or "")
+    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold, cfg.variant.labels, uses_hagrid)
     print(describe(train_df, test_sets))
 
     # ---- logging ----------------------------------------------------------------------------
@@ -105,6 +115,8 @@ def main(cfg: DictConfig) -> None:
                          metadata_classes={a: len(c) for a, c in METADATA.items()} if use_metadata else None,
                          metadata_weight=cfg.variant.get("metadata_weight", 0.1),
                          pooling=m.get("pooling", "global"), grid=m.get("grid", 4))
+    if m.get("init_from"):
+        init_from_saved_model(model, m.init_from)
     if cfg.train.epochs > 0:
         metadata = metadata_targets(train_df, Path(cfg.paths.external_dir) / "11k" / "HandInfo.csv") \
             if use_metadata else None

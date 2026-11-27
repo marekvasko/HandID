@@ -8,11 +8,13 @@ Canonical form (identical for all datasets, which removes most of the domain gap
 
 If MediaPipe finds no hand we retry on the image rotated by 180 degrees, and as a last
 resort fall back to the whole image (padded to a square, rotated by the dataset's usual
-orientation). The method used is recorded in the manifest column ``align``.
+orientation). Datasets that ship landmarks (HaGRID) skip detection: ``align_annotated_one``.
+The method used is recorded in the manifest column ``align``.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -145,6 +147,31 @@ def align_one(job: tuple[str, str, str, str]) -> str:
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     crop.save(dst, quality=95)
     return method
+
+
+# HaGRID images are 1920 x 1080 with the hand only ~300 px wide: decode at full resolution so the
+# 448 px crop is not upscaled from a 1280 px thumbnail.
+ANNOTATED_MAX_SIDE = 4096
+
+
+def align_annotated_one(job: tuple[str, str, str, str]) -> str:
+    """Like ``align_one`` but with landmarks given by the dataset (normalised [x, y], 21 x 2).
+
+    Normalised coordinates are converted to pixels of the *loaded* image, so any downscaling
+    in ``load_image`` is accounted for automatically.
+    """
+    src, dst, landmarks_json, side = job
+    try:
+        im = load_image(src, max_side=ANNOTATED_MAX_SIDE)
+        pts = np.asarray(json.loads(landmarks_json)) * [im.width, im.height]
+        crop = _worker.crop_from_landmarks(im, pts)
+    except Exception as e:
+        return f"error:{type(e).__name__}"
+    if side == "left":
+        crop = ImageOps.mirror(crop)
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    crop.resize((_worker.out_size, _worker.out_size), Image.BICUBIC).save(dst, quality=95)
+    return "annotation"
 
 
 def mask_one(job: tuple[str, str]) -> str:

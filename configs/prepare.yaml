@@ -4,7 +4,9 @@ defaults:
   - paths: default
   - _self_
 
+datasets: [ours, 11k, hd]   # which manifests to (re)build; HaGRID is optional: datasets=[hagrid]
 external_test_fraction: 0.2   # subject-disjoint hold-out of 11k and HD, never used for training
+hagrid_test_fraction: 0.1     # HaGRID has ~12k users: 10 % is plenty for a stable test set
 seed: 0
 align:
   out_size: 448               # cached crop size; training uses smaller random crops of it

@@ -9,3 +9,4 @@ layer_decay: 0.85      # 24 blocks
 lr_head: 1.0e-3
 weight_decay: 0.05
 warmup_epochs: 1
+init_from: null       # path to a model.pt of an earlier run (save_model=true) to start from

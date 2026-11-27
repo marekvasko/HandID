@@ -53,7 +53,10 @@ def _pairs(meta: pd.DataFrame, emb: np.ndarray) -> dict[str, np.ndarray]:
         groups = pd.Series(ident[i][mask])
         w_genuine[mask] = 1.0 / groups.map(groups.value_counts()).to_numpy()
 
-    return dict(score=np.einsum("nd,nd->n", emb[i], emb[j]), same_id=same_id, same_sess=same_sess,
+    # one N x N matrix product instead of gathering emb[i], emb[j]: with ~10k HaGRID test images the
+    # gathered pair embeddings alone would need ~40 GB
+    gram = emb @ emb.T
+    return dict(score=gram[i, j], same_id=same_id, same_sess=same_sess,
                 impostor=impostor, weight=np.where(same_id, w_genuine, w_impostor))
 
 

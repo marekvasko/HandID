@@ -3,14 +3,17 @@
 Every manifest has the same columns, so the rest of the code never needs to know
 which dataset an image came from:
 
-    dataset     ours | 11k | hd
-    subject     anonymous subject id, e.g. "ours_007", "11k_0000123", "hd_0042"
+    dataset     ours | 11k | hd | hagrid
+    subject     anonymous subject id, e.g. "ours_007", "11k_0000123", "hd_0042", "hagrid_3fa2..."
     side        left | right        (which hand)
     identity    f"{subject}_{side}" (the class we learn; left and right hands are different biometrics)
-    session     capture session id (string). External datasets have a single session "0".
+    session     capture session id (string). 11k / HD have a single session "0";
+                HaGRID uses the gesture name (each gesture was recorded separately).
     split       ours: "fold_0".."fold_9" (people-disjoint folds, given)
                 external: "train" | "test" (subject-disjoint, fixed seed)
     src_path    absolute path of the original image
+
+HaGRID additionally keeps its meta columns ``age``, ``gender``, ``race`` (for issue #5).
 
 PRIVACY: the real names in our dataset are replaced by ``ours_XXX``. The mapping is
 written to ``paths.private_dir`` (gitignored) and must never be committed or logged.
@@ -19,18 +22,21 @@ written to ``paths.private_dir`` (gitignored) and must never be committed or log
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
 COLUMNS = ["dataset", "subject", "side", "identity", "session", "split", "src_path"]
 
 
-def _finish(df: pd.DataFrame) -> pd.DataFrame:
+def _finish(df: pd.DataFrame, extra_columns: tuple[str, ...] = ()) -> pd.DataFrame:
     df["identity"] = df["subject"] + "_" + df["side"]
-    return df[COLUMNS].sort_values(["subject", "side", "session", "src_path"]).reset_index(drop=True)
+    columns = COLUMNS + list(extra_columns)
+    return df[columns].sort_values(["subject", "side", "session", "src_path"]).reset_index(drop=True)
 
 
 def _subject_split(subjects: list[str], test_fraction: float, seed: int) -> dict[str, str]:
@@ -120,3 +126,75 @@ def build_hd(external_dir: Path, test_fraction: float, seed: int) -> pd.DataFram
     df = pd.DataFrame(rows)
     df["split"] = df["subject"].map(_subject_split(df["subject"].unique().tolist(), test_fraction, seed))
     return _finish(df)
+
+
+# --- HaGRID ------------------------------------------------------------------------------------
+HAGRID_GESTURES = ("stop_inverted", "peace_inverted", "two_up_inverted")  # back of the hand faces the camera
+
+
+def hagrid_side(landmarks: np.ndarray) -> str:
+    """Which hand a *dorsal* view shows, from the 21 landmarks alone (HaGRID has no left/right label).
+
+    Rotate the hand so that wrist (0) -> middle knuckle (9) points up. Looking at the back of
+    a RIGHT hand, the thumb side (landmarks 1 / 5) is then on the left, i.e. at a smaller x than
+    the little-finger side (17); for a left hand it is the other way round.
+
+    "Rotate, then compare x" is the sign of the 2-D cross product up x (little - index knuckle),
+    which needs no rotation and does not depend on the image aspect ratio (normalised x and y
+    are scaled differently, a positive scaling never flips the sign).
+
+    Many HaGRID images are mirrored selfies, so the derived side may be the opposite of the real
+    hand. That does not matter for identification: a user's camera mirrors all of their images
+    the same way, so the label is swapped consistently and (user, side) stays one physical hand.
+    """
+    up = landmarks[9] - landmarks[0]
+    across = landmarks[17] - landmarks[5]
+    cross = up[0] * across[1] - up[1] * across[0]  # image coordinates: y points down
+    return "right" if cross > 0 else "left"
+
+
+def _hagrid_rows(annotation_file: Path, gesture: str, image_dir: Path, dropped: dict[str, int]) -> list[dict]:
+    rows = []
+    for uuid, a in json.loads(annotation_file.read_text()).items():
+        hand = a["labels"].index(gesture)  # the other hand, if any, is labelled "no_gesture"
+        landmarks = a["hand_landmarks"][hand] if hand < len(a["hand_landmarks"]) else []
+        if len(landmarks) != 21:
+            dropped["no landmarks"] += 1
+            continue
+        src = image_dir / gesture / f"{uuid}.jpg"
+        if not src.exists():
+            dropped["image missing"] += 1
+            continue
+        meta = {k: (v[hand] if len(v) == len(a["labels"]) else v[0]) if v else None for k, v in a["meta"].items()}
+        rows.append(dict(dataset="hagrid", subject="hagrid_" + a["user_id"][:16],
+                         side=hagrid_side(np.asarray(landmarks)), session=gesture, src_path=str(src),
+                         landmarks=json.dumps(np.round(landmarks, 5).tolist()), **meta))
+    return rows
+
+
+def build_hagrid(hagrid_dir: Path, test_fraction: float, seed: int,
+                 gestures: tuple[str, ...] = HAGRID_GESTURES) -> pd.DataFrame:
+    """HaGRID v2 (Kapitanov et al.): the gestures that show the back of the hand.
+
+    <hagrid_dir>/annotations/annotations/{train,val,test}/<gesture>.json and
+    <hagrid_dir>/images/<gesture>/<uuid>.jpg. HaGRID's own train/val/test split is pooled; we
+    make our own subject-disjoint split. ``user_id`` is already an anonymous hash.
+
+    The returned frame has an extra column ``landmarks`` (JSON, normalised [x, y] of the 21
+    annotated landmarks) that alignment needs; it is not written to the manifest CSV.
+    Identities with fewer than 2 images are dropped (they cannot form a genuine pair).
+    """
+    dropped = {"no landmarks": 0, "image missing": 0}
+    rows = []
+    for split in ("train", "val", "test"):
+        for gesture in gestures:
+            rows += _hagrid_rows(hagrid_dir / "annotations" / "annotations" / split / f"{gesture}.json",
+                                 gesture, hagrid_dir / "images", dropped)
+    df = pd.DataFrame(rows)
+    df["identity"] = df["subject"] + "_" + df["side"]
+    n_images = df["identity"].map(df["identity"].value_counts())
+    dropped["identity with 1 image"] = int((n_images < 2).sum())
+    df = df[n_images >= 2].copy()
+    print(f"[hagrid] kept {len(df)} images, dropped {dropped}")
+    df["split"] = df["subject"].map(_subject_split(df["subject"].unique().tolist(), test_fraction, seed))
+    return _finish(df, extra_columns=("age", "gender", "race", "landmarks"))
