@@ -455,12 +455,51 @@ Mean ± std is over the runs (one model per held-out fold of our data).
 """
 
 
+def mlflow_runs(tracking_uri: str, experiment: str) -> dict[tuple[str, str, str], dict]:
+    """{(variant, model output dir, fold): {url, commit}} for the latest finished run of each."""
+    client = mlflow.MlflowClient(tracking_uri)
+    exp = client.get_experiment_by_name(experiment)
+    if exp is None:
+        return {}
+    runs = {}
+    for r in client.search_runs([exp.experiment_id], "attributes.status = 'FINISHED'", max_results=5000,
+                                order_by=["attributes.start_time ASC"]):
+        t = r.data.tags
+        if "variant" not in t:
+            continue
+        model_dir = t.get("model", "") + ("_masked" if t.get("input") == "masked" else "")
+        runs[(t["variant"], model_dir, t.get("fold", "0"))] = {
+            "url": f"{tracking_uri}/#/experiments/{exp.experiment_id}/runs/{r.info.run_id}",
+            "commit": t.get("git_commit", "?"), "name": r.info.run_name}
+    return runs
+
+
+def runs_section(systems: dict, folds: list[str], runs: dict, experiment_url: str) -> str:
+    """Markdown table linking every number above to the MLflow run that produced it."""
+    rows = []
+    for (variant, model), sys in systems.items():
+        trained_per_fold = (variant, model, folds[0].split("_")[1]) in runs and variant not in ("zero_shot", "external_only", "hagrid_external")
+        for f in (folds if trained_per_fold else ["fold_0"]):
+            run = runs.get((variant, model, f.split("_")[1]))
+            rows.append({"System": label((variant, model)),
+                         "Run": f"fold {f.split('_')[1]}" if trained_per_fold else "one run, all folds",
+                         "MLflow": f"[{run['name']}]({run['url']})" if run else "not found",
+                         "Commit": f"`{run['commit']}`" if run else "–"})
+    return f"""## Runs
+
+Every number above comes from these MLflow runs (experiment: [{experiment_url}]({experiment_url})).
+
+{md_table(pd.DataFrame(rows))}
+"""
+
+
 def external_cell(sys: dict, name: str, protocol: str, metric: str) -> str:
     runs = sys["external"].get(name, [])
     return mean_std(np.array([r[protocol][metric] for r in runs]))
 
 
-def experiment_report(key: str, idea: dict, systems: dict, conclusion: str) -> str:
+def experiment_report(key: str, idea: dict, systems: dict, conclusion: str, runs: dict,
+                      experiment_url: str) -> str:
     subset, folds = restrict(systems, idea["systems"])
     if not subset:
         return f"# {idea['title']} (#{idea['issue']})\n\n_No results yet._\n"
@@ -498,6 +537,8 @@ cross-session EER to the first row (negative = better). 11k / HD: subject-disjoi
 ![EER per fold](../figures/exp_{key}_eer_per_fold.png)
 
 {conclusion}
+
+{runs_section(subset, folds, runs, experiment_url)}
 """
 
 
@@ -506,6 +547,9 @@ def main(cfg: DictConfig) -> None:
     FIGS.mkdir(parents=True, exist_ok=True)
     manifests = {ds: pd.read_csv(Path(cfg.paths.manifest_dir) / f"{ds}.csv", dtype=str) for ds in ("ours", "11k", "hd")}
     all_systems = collect(ROOT / "outputs")
+    runs = mlflow_runs(cfg.mlflow.tracking_uri, cfg.mlflow.experiment)
+    exp = mlflow.MlflowClient(cfg.mlflow.tracking_uri).get_experiment_by_name(cfg.mlflow.experiment)
+    experiment_url = f"{cfg.mlflow.tracking_uri}/#/experiments/{exp.experiment_id}" if exp else cfg.mlflow.tracking_uri
     systems, _ = restrict(all_systems, MAIN_SYSTEMS)
     conclusions = json.loads((REPORTS / "conclusions.json").read_text()) if (REPORTS / "conclusions.json").exists() else {}
 
@@ -522,7 +566,7 @@ def main(cfg: DictConfig) -> None:
     (REPORTS / "experiments").mkdir(exist_ok=True)
     for key, idea in IDEAS.items():
         (REPORTS / "experiments" / f"{key}.md").write_text(
-            experiment_report(key, idea, all_systems, conclusions.get(key, "")))
+            experiment_report(key, idea, all_systems, conclusions.get(key, ""), runs, experiment_url))
     (REPORTS / "task2_strong_system.md").write_text(
         task2_report(all_systems).replace("{hd_test_people}", str(hd_test)).replace("{conclusion}", conclusions.get("task2", "")))
 

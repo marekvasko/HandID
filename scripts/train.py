@@ -59,6 +59,16 @@ def git_commit() -> str:
         return "unknown"
 
 
+def git_dirty() -> str:
+    """'true' if code or configs differ from the commit (the queue list itself does not count)."""
+    try:
+        out = subprocess.check_output(["git", "status", "--porcelain", "--", "src", "scripts", "configs",
+                                       ":!configs/queue.txt"], text=True)
+        return str(bool(out.strip())).lower()
+    except Exception:
+        return "unknown"
+
+
 @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed)
@@ -77,7 +87,7 @@ def main(cfg: DictConfig) -> None:
                           tracking_uri=cfg.mlflow.tracking_uri,
                           tags={"variant": cfg.variant.name, "model": cfg.model.name, "input": cfg.input.name,
                                 "fold": str(cfg.fold),
-                                "git_commit": git_commit()})
+                                "git_commit": git_commit(), "git_dirty": git_dirty()})
     logger.log_hyperparams(flatten(OmegaConf.to_container(cfg.train), "train")
                            | {f"model/{k}": v for k, v in cfg.model.items()}
                            | {"variant/datasets": ",".join(cfg.variant.datasets), "fold": cfg.fold,
