@@ -1,10 +1,12 @@
 """Data: image bank, train/test split, GPU augmentation and the Lightning DataModule.
 
-Speed design (the CPU of the training machine is shared and slow, the GPU is fast):
+Speed design (the CPU of the training machine is shared and slow):
     * every aligned crop is decoded ONCE into a uint8 array on NVMe (the "image bank",
-      one memory-mapped .npy per dataset and input type); loading a batch is a memcpy,
-    * all augmentation runs on the GPU, batched, with kornia (``GpuAugment``),
-    * normalisation is part of the model, because CLIP / SigLIP / DINO use different statistics.
+      one memory-mapped .npy per dataset and input type), so workers never decode JPEGs,
+    * augmentation = torchvision.transforms.v2 on uint8 tensors in the DataLoader workers;
+      the expensive hue jitter is replaced by a cheap per-channel gain (``RandomWhiteBalance``),
+    * conversion to float happens on the GPU; normalisation is part of the model, because
+      CLIP / SigLIP / DINO use different statistics.
 
 Which images are used for training is decided by the experiment *variant*:
 
@@ -22,15 +24,14 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import kornia.augmentation as K
 import lightning as L
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torchvision.transforms import v2 as T
 
 # ---------------------------------------------------------------------------------------------
 # Image bank
@@ -71,14 +72,14 @@ def load_manifests(manifest_dir: str, bank_dir: str, input_name: str, aligned_di
 
 
 class BankImages(Dataset):
-    """Rows of a manifest -> (uint8 HWC image, class index, metadata targets).
+    """Rows of a manifest -> (transformed uint8 CHW image, class index, metadata targets).
 
     Class index is -1 for test data; metadata targets are -1 where unknown (see METADATA).
     """
 
-    def __init__(self, df: pd.DataFrame, banks: dict[str, np.ndarray], labels: list[int] | None = None,
-                 metadata: np.ndarray | None = None):
-        self.banks = banks
+    def __init__(self, df: pd.DataFrame, banks: dict[str, np.ndarray], transform: nn.Module,
+                 labels: list[int] | None = None, metadata: np.ndarray | None = None):
+        self.banks, self.transform = banks, transform
         self.rows = list(zip(df["dataset"], df["bank_row"]))
         self.labels = labels if labels is not None else [-1] * len(df)
         self.metadata = metadata if metadata is not None else np.full((len(df), len(METADATA)), -1)
@@ -88,7 +89,9 @@ class BankImages(Dataset):
 
     def __getitem__(self, i: int):
         ds, row = self.rows[i]
-        return torch.from_numpy(np.array(self.banks[ds][row])), self.labels[i], torch.from_numpy(self.metadata[i])
+        image = torch.from_numpy(np.array(self.banks[ds][row])).permute(2, 0, 1)  # uint8 C x H x W
+        return self.transform(image), self.labels[i], torch.from_numpy(self.metadata[i])
+
 
 
 # ---------------------------------------------------------------------------------------------
@@ -121,36 +124,45 @@ def metadata_targets(df: pd.DataFrame, handinfo_csv: str) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------------------------
-# GPU transforms (input: uint8 B x H x W x 3 on the GPU, output: float B x 3 x S x S in [0, 1])
+# Transforms (uint8 C x H x W in, uint8 C x S x S out; run in the DataLoader workers)
 # ---------------------------------------------------------------------------------------------
-def to_float(images: torch.Tensor) -> torch.Tensor:
-    return images.permute(0, 3, 1, 2).float().div_(255)
+class RandomWhiteBalance(nn.Module):
+    """Multiply each colour channel by its own random gain - a camera white-balance change.
 
-
-class GpuAugment(nn.Module):
-    """Per-sample random augmentation of a whole batch on the GPU.
-
-    No horizontal flip: all hands are canonicalised to look like right hands.
+    Built from basic tensor ops because torchvision has no such transform; it is also much
+    cheaper than ColorJitter's hue shift (which needs an RGB <-> HSV round trip).
     """
 
-    def __init__(self, size: int):
+    def __init__(self, max_gain: float = 0.1, p: float = 0.5):
         super().__init__()
-        self.augment = K.AugmentationSequential(
-            K.RandomResizedCrop((size, size), scale=(0.6, 1.0), ratio=(0.85, 1.15)),
-            K.RandomRotation(15.0, p=1.0),
-            K.ColorJitter(0.3, 0.3, 0.3, 0.03, p=0.9),
-            K.RandomGrayscale(p=0.1),
-            K.RandomGaussianBlur((5, 5), (0.1, 2.0), p=0.2),
-        )
+        self.max_gain, self.p = max_gain, p
 
-    @torch.no_grad()
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        return self.augment(to_float(images)).clamp_(0, 1)
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
+        if torch.rand(()) > self.p:
+            return image
+        gains = 1 + (torch.rand(3, 1, 1) * 2 - 1) * self.max_gain
+        return (image.float() * gains).clamp_(0, 255).to(torch.uint8)
 
 
-@torch.no_grad()
-def eval_transform(images: torch.Tensor, size: int) -> torch.Tensor:
-    return F.interpolate(to_float(images), size=(size, size), mode="bilinear", antialias=True, align_corners=False)
+def train_transform(size: int) -> T.Compose:
+    # no horizontal flip: all hands are canonicalised to look like right hands
+    return T.Compose([
+        T.RandomResizedCrop(size, scale=(0.6, 1.0), ratio=(0.85, 1.15), antialias=True),
+        T.RandomRotation(15),
+        T.RandomApply([T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3)], p=0.9),
+        RandomWhiteBalance(max_gain=0.1, p=0.5),
+        T.RandomGrayscale(p=0.1),
+        T.RandomApply([T.GaussianBlur(5, sigma=(0.1, 2.0))], p=0.2),
+    ])
+
+
+def eval_transform(size: int) -> T.Resize:
+    return T.Resize((size, size), antialias=True)
+
+
+def to_float(images: torch.Tensor) -> torch.Tensor:
+    """uint8 batch (on the GPU) -> float in [0, 1]."""
+    return images.float().div_(255)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -194,12 +206,12 @@ class HandDataModule(L.LightningDataModule):
         self.train_df, self.banks, self.metadata = train_df, banks, metadata
         self.classes = sorted(train_df["label"].unique())
         self.class_index = {c: i for i, c in enumerate(self.classes)}
-        self.batch_size, self.num_workers, self.balance_power = batch_size, num_workers, balance_power
-        self.augment = GpuAugment(image_size)
+        self.image_size, self.batch_size, self.num_workers = image_size, batch_size, num_workers
+        self.balance_power = balance_power
 
     def train_dataloader(self) -> DataLoader:
         labels = [self.class_index[c] for c in self.train_df["label"]]
-        ds = BankImages(self.train_df, self.banks, labels, self.metadata)
+        ds = BankImages(self.train_df, self.banks, train_transform(self.image_size), labels, self.metadata)
         # Each image is drawn with probability ~ 1 / n_images(class)^power.
         # power=0: plain shuffling, power=1: every class equally often. 0.5 is a compromise
         # that keeps heavily recorded hands from dominating without over-sampling tiny ones.
@@ -210,13 +222,13 @@ class HandDataModule(L.LightningDataModule):
 
     def on_after_batch_transfer(self, batch, dataloader_idx: int):
         images, labels, metadata = batch
-        if self.trainer.training:
-            images = self.augment(images)
-        return images, labels, metadata
+        return to_float(images), labels, metadata
 
 
-def eval_loader(df: pd.DataFrame, banks: dict[str, np.ndarray], batch_size: int, num_workers: int) -> DataLoader:
-    return DataLoader(BankImages(df, banks), batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+def eval_loader(df: pd.DataFrame, banks: dict[str, np.ndarray], image_size: int, batch_size: int,
+                num_workers: int) -> DataLoader:
+    return DataLoader(BankImages(df, banks, eval_transform(image_size)), batch_size=batch_size,
+                      num_workers=num_workers, pin_memory=True)
 
 
 def describe(train: pd.DataFrame, test: dict[str, pd.DataFrame]) -> str:
