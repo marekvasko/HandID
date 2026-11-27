@@ -45,6 +45,9 @@ def _read(path: str) -> np.ndarray:
 
 def load_bank(paths: list[str], cache_file: Path) -> np.ndarray:
     """uint8 array (N, H, W, 3) with the images in ``paths`` order, memory-mapped from disk."""
+    if cache_file.exists() and len(np.load(cache_file, mmap_mode="r")) != len(paths):
+        print(f"{cache_file.name} does not match its manifest (re-prepared?), rebuilding")
+        cache_file.unlink()
     if not cache_file.exists():
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = cache_file.with_suffix(".tmp.npy")
