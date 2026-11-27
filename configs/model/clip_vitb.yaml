@@ -1,0 +1,14 @@
+# OpenAI CLIP ViT-B/16 image tower (image-text contrastive pre-training, 400 M pairs).
+# Pre-trained at 224 px; position embeddings are interpolated to the training size.
+name: clip_vitb
+backbone: vit_base_patch16_clip_224.openai
+timm_kwargs:
+  img_size: ${train.image_size}
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 2.0e-5    # CLIP is known to be fragile under fine-tuning: lower lr than DINO
+layer_decay: 0.75
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

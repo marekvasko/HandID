@@ -1,0 +1,12 @@
+# DINOv3 ConvNeXt-B (89 M params): a convolutional network distilled from the DINOv3 ViT-7B.
+# Convolutions keep fine local texture (knuckle creases, veins) at full resolution.
+name: dinov3_convnext_b
+backbone: convnext_base.dinov3_lvd1689m
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 5.0e-5
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

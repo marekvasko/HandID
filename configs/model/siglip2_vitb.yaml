@@ -1,0 +1,11 @@
+# SigLIP 2 ViT-B/16 image tower at 384 px (image-text sigmoid-loss pre-training, WebLI).
+name: siglip2_vitb
+backbone: vit_base_patch16_siglip_384.v2_webli
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 2.0e-5
+layer_decay: 0.75
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

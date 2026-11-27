@@ -1,0 +1,6 @@
+# @package _global_
+# Realistic setting: labelled public data + our sessions without person labels.
+variant:
+  name: ours_sessions_external
+  labels: session
+  datasets: [ours, 11k, hd]
