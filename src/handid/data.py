@@ -10,13 +10,13 @@ Speed design (the CPU of the training machine is shared and slow):
 
 Which images are used for training is decided by the experiment *variant*:
 
-    datasets   any of [ours, 11k, hd]
+    datasets   any of [ours, 11k, hd, hagrid]
     labels     identity  -> class = one hand of one person (needs person labels across sessions)
                session   -> class = one capture session of our data (no person labels needed;
                             two sessions of the same person are treated as different classes)
 
 Test sets are always: every fold of our dataset not used for training, plus the
-subject-disjoint test splits of 11k and HD.
+subject-disjoint test splits of 11k and HD (and of HaGRID, once its manifest exists).
 """
 
 from __future__ import annotations
@@ -61,7 +61,9 @@ def load_manifests(manifest_dir: str, bank_dir: str, input_name: str, aligned_di
                    ) -> tuple[dict[str, pd.DataFrame], dict[str, np.ndarray]]:
     """Manifests (with a ``bank_row`` column) and the matching image banks."""
     manifests, banks = {}, {}
-    for ds in ("ours", "11k", "hd"):
+    for ds in ("ours", "11k", "hd", "hagrid"):
+        if ds == "hagrid" and not (Path(manifest_dir) / "hagrid.csv").exists():
+            continue  # optional dataset (scripts/prepare_data.py datasets=[hagrid])
         df = pd.read_csv(Path(manifest_dir) / f"{ds}.csv", dtype=str)
         if input_name == "masked":  # same crops, background removed (see align.hand_mask)
             df["path"] = df["path"].str.replace(aligned_dir, aligned_dir + "_masked", regex=False)
@@ -177,7 +179,7 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
     train_parts = []
     if "ours" in variant_datasets:
         train_parts.append(ours[ours.split != held_out])
-    for ds in ("11k", "hd"):
+    for ds in ("11k", "hd", "hagrid"):
         if ds in variant_datasets:
             train_parts.append(manifests[ds][manifests[ds].split == "train"])
     train = (pd.concat(train_parts) if train_parts else ours.iloc[:0]).reset_index(drop=True)
@@ -191,8 +193,9 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
     used_folds = set(train.loc[train.dataset == "ours", "split"])
     for f in sorted(set(ours.split) - used_folds, key=lambda s: int(s.split("_")[1])):
         test[f"ours/{f}"] = ours[ours.split == f]
-    for ds in ("11k", "hd"):
-        test[f"{ds}/test"] = manifests[ds][manifests[ds].split == "test"]
+    for ds in ("11k", "hd", "hagrid"):
+        if ds in manifests:
+            test[f"{ds}/test"] = manifests[ds][manifests[ds].split == "test"]
     return train, test
 
 
