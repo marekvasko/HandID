@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 from omegaconf import DictConfig
 
-from handid.data import load_manifests
 from handid.protocols import session_templates
 
 
@@ -52,7 +51,7 @@ def audit_fold(meta: pd.DataFrame, emb: np.ndarray) -> pd.DataFrame:
 @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     runs = Path(cfg.get("runs", "outputs/ours_only/dinov3_vitb"))
-    ours = load_manifests(cfg.paths.manifest_dir)["ours"]
+    ours = pd.read_csv(Path(cfg.paths.manifest_dir) / "ours.csv", dtype=str)
     parts = []
     for fold in sorted(ours.split.unique()):
         emb_file = runs / f"fold{fold.split('_')[1]}" / "embeddings.npz"

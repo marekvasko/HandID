@@ -6,6 +6,7 @@ external_archives: /mnt/hdd/Datasets/Hands                      # Hands.zip (11k
 data_dir: ${hydra:runtime.cwd}/data                              # everything derived lives here (gitignored)
 external_dir: ${.data_dir}/external                              # unpacked archives
 aligned_dir: ${.data_dir}/aligned                                # hand crops, upright, left hands mirrored
+bank_dir: /home/ivasko/handid_data/bank                          # decoded crops as uint8 .npy - put it on fast (NVMe) storage
 manifest_dir: ${.data_dir}/manifests                             # one CSV per dataset
 private_dir: ${.data_dir}/private                                # name -> anonymous id map. NEVER commit.
 hand_landmarker: ${.data_dir}/models/hand_landmarker.task

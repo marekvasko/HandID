@@ -1,4 +1,5 @@
 # @package _global_
 variant:
   name: ours_only
+  labels: identity            # identity | session (see data.py)
   datasets: [ours]   # which datasets are used for training

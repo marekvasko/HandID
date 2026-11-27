@@ -24,17 +24,18 @@ from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
 from handid import protocols
-from handid.data import HandDataModule, describe, eval_loader, load_manifests, split_train_test
+from handid.data import HandDataModule, describe, eval_loader, eval_transform, load_manifests, split_train_test
 from handid.model import HandIDModule
 
 
 @torch.no_grad()
-def embed(model: HandIDModule, df: pd.DataFrame, cfg: DictConfig) -> np.ndarray:
+def embed(model: HandIDModule, df: pd.DataFrame, banks: dict, cfg: DictConfig) -> np.ndarray:
     model.eval().cuda()
     out = []
-    for images, _ in eval_loader(df, cfg.train.image_size, cfg.eval.batch_size, cfg.train.num_workers):
+    for images, _ in eval_loader(df, banks, cfg.eval.batch_size, cfg.train.num_workers):
+        images = eval_transform(images.cuda(non_blocking=True), cfg.train.image_size)
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            out.append(model(images.cuda(non_blocking=True)).cpu())
+            out.append(model(images).cpu())
     return torch.cat(out).numpy()
 
 
@@ -64,11 +65,9 @@ def main(cfg: DictConfig) -> None:
     out_dir = Path(HydraConfig.get().runtime.output_dir)
 
     # ---- data -------------------------------------------------------------------------------
-    manifests = load_manifests(cfg.paths.manifest_dir)
-    if cfg.input.name == "masked":  # same crops, background removed (cached next to the plain ones)
-        for df in manifests.values():
-            df["path"] = df["path"].str.replace(cfg.paths.aligned_dir, cfg.paths.aligned_dir + "_masked", regex=False)
-    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold)
+    manifests, banks = load_manifests(cfg.paths.manifest_dir, cfg.paths.bank_dir, cfg.input.name,
+                                      cfg.paths.aligned_dir)
+    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold, cfg.variant.labels)
     print(describe(train_df, test_sets))
 
     # ---- logging ----------------------------------------------------------------------------
@@ -81,16 +80,18 @@ def main(cfg: DictConfig) -> None:
     logger.log_hyperparams(flatten(OmegaConf.to_container(cfg.train), "train")
                            | {f"model/{k}": v for k, v in cfg.model.items()}
                            | {"variant/datasets": ",".join(cfg.variant.datasets), "fold": cfg.fold,
-                              "n_train_images": len(train_df), "n_train_identities": train_df.identity.nunique()})
+                              "variant/labels": cfg.variant.labels,
+                              "n_train_images": len(train_df), "n_train_classes": train_df["label"].nunique()})
 
     # ---- model + training -------------------------------------------------------------------
     m = cfg.model
-    model = HandIDModule(num_classes=train_df.identity.nunique(), backbone=m.backbone,
+    model = HandIDModule(num_classes=train_df["label"].nunique(), backbone=m.backbone,
                          embedding_dim=m.embedding_dim, arcface_scale=m.arcface_scale,
                          arcface_margin=m.arcface_margin, lr_backbone=m.lr_backbone, lr_head=m.lr_head,
-                         weight_decay=m.weight_decay, warmup_epochs=m.warmup_epochs, layer_decay=m.layer_decay)
+                         weight_decay=m.weight_decay, warmup_epochs=m.warmup_epochs, layer_decay=m.layer_decay,
+                         timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None)
     if cfg.train.epochs > 0:
-        data = HandDataModule(train_df, cfg.train.image_size, cfg.train.batch_size, cfg.train.num_workers,
+        data = HandDataModule(train_df, banks, cfg.train.image_size, cfg.train.batch_size, cfg.train.num_workers,
                               cfg.train.balance_power)
         trainer = L.Trainer(max_epochs=cfg.train.epochs, precision=cfg.train.precision, logger=logger,
                             enable_checkpointing=False, log_every_n_steps=20, default_root_dir=out_dir,
@@ -103,7 +104,7 @@ def main(cfg: DictConfig) -> None:
     # ---- evaluation -------------------------------------------------------------------------
     results, raw_scores, embeddings = {}, {}, {}
     for name, df in test_sets.items():
-        emb = embed(model, df, cfg)
+        emb = embed(model, df, banks, cfg)
         embeddings[name] = emb  # rows follow the manifest order of this test set
         evaluate = protocols.evaluate_ours if name.startswith("ours/") else protocols.evaluate_external
         results[name], raw = evaluate(df, emb)
