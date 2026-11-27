@@ -73,7 +73,13 @@ ours_external convnext_b_in22k 1 plain
 ours_external convnext_b_in22k 2 plain
 ours_external convnext_b_in22k 3 plain
 ours_external convnext_b_in22k 4 plain
-# 5. HaGRID (#8) goes here once exp/hagrid is reviewed
+# 5. HaGRID (#8): stage 1 pre-training (never sees ours, evaluates all folds), stage 2 fine-tuning
+hagrid_external dinov3_vitb 0 plain save_model=true
+ours_external dinov3_vitb_hagrid 0 plain
+ours_external dinov3_vitb_hagrid 1 plain
+ours_external dinov3_vitb_hagrid 2 plain
+ours_external dinov3_vitb_hagrid 3 plain
+ours_external dinov3_vitb_hagrid 4 plain
 # 6. Session-only supervision (#3), 10 folds
 ours_sessions dinov3_vitb 0 plain
 ours_sessions dinov3_vitb 1 plain
