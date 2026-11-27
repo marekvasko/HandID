@@ -18,7 +18,7 @@ train:
   batch_size: 64
   image_size: 384          # hand crops are cached at 448 px
   balance_power: 0.5       # identity balancing of the sampler, see data.py
-  num_workers: 6            # only memcpy from the image bank; augmentation runs on the GPU
+  num_workers: 10           # torchvision v2 augmentation on uint8 tensors from the image bank
   precision: bf16-mixed
 
 eval:
