@@ -1,0 +1,134 @@
+# <variant> <model> <fold> <input> [hydra overrides]   - see scripts/queue.sh
+# Baselines without our data: one run evaluates all 10 folds
+zero_shot dinov3_vitb 0 plain
+zero_shot clip_vitb 0 plain
+zero_shot siglip2_vitb 0 plain
+zero_shot convnext_b_clip_laion 0 plain
+zero_shot clip_vitl_laion 0 plain
+zero_shot clip_vith_laion 0 plain
+zero_shot convnext_xxl_clip_laion 0 plain
+zero_shot resnet50_in1k 0 plain
+zero_shot convnext_b_in22k 0 plain
+external_only dinov3_vitb 0 plain
+# Main systems, 10 folds
+ours_only dinov3_vitb 0 plain
+ours_only dinov3_vitb 1 plain
+ours_only dinov3_vitb 2 plain
+ours_only dinov3_vitb 3 plain
+ours_only dinov3_vitb 4 plain
+ours_only dinov3_vitb 5 plain
+ours_only dinov3_vitb 6 plain
+ours_only dinov3_vitb 7 plain
+ours_only dinov3_vitb 8 plain
+ours_only dinov3_vitb 9 plain
+ours_external dinov3_vitb 0 plain
+ours_external dinov3_vitb 1 plain
+ours_external dinov3_vitb 2 plain
+ours_external dinov3_vitb 3 plain
+ours_external dinov3_vitb 4 plain
+ours_external dinov3_vitb 5 plain
+ours_external dinov3_vitb 6 plain
+ours_external dinov3_vitb 7 plain
+ours_external dinov3_vitb 8 plain
+ours_external dinov3_vitb 9 plain
+# Session-only supervision (#3), 10 folds
+ours_sessions dinov3_vitb 0 plain
+ours_sessions dinov3_vitb 1 plain
+ours_sessions dinov3_vitb 2 plain
+ours_sessions dinov3_vitb 3 plain
+ours_sessions dinov3_vitb 4 plain
+ours_sessions dinov3_vitb 5 plain
+ours_sessions dinov3_vitb 6 plain
+ours_sessions dinov3_vitb 7 plain
+ours_sessions dinov3_vitb 8 plain
+ours_sessions dinov3_vitb 9 plain
+ours_sessions_external dinov3_vitb 0 plain
+ours_sessions_external dinov3_vitb 1 plain
+ours_sessions_external dinov3_vitb 2 plain
+ours_sessions_external dinov3_vitb 3 plain
+ours_sessions_external dinov3_vitb 4 plain
+ours_sessions_external dinov3_vitb 5 plain
+ours_sessions_external dinov3_vitb 6 plain
+ours_sessions_external dinov3_vitb 7 plain
+ours_sessions_external dinov3_vitb 8 plain
+ours_sessions_external dinov3_vitb 9 plain
+# Ablations, folds 0-4 (paired with ours_external dinov3_vitb)
+ours_external dinov3_vitb 0 masked
+ours_external dinov3_vitb 1 masked
+ours_external dinov3_vitb 2 masked
+ours_external dinov3_vitb 3 masked
+ours_external dinov3_vitb 4 masked
+ours_external_meta dinov3_vitb 0 plain
+ours_external_meta dinov3_vitb 1 plain
+ours_external_meta dinov3_vitb 2 plain
+ours_external_meta dinov3_vitb 3 plain
+ours_external_meta dinov3_vitb 4 plain
+ours_external siglip2_vitb 0 plain
+ours_external siglip2_vitb 1 plain
+ours_external siglip2_vitb 2 plain
+ours_external siglip2_vitb 3 plain
+ours_external siglip2_vitb 4 plain
+ours_external clip_vitb 0 plain
+ours_external clip_vitb 1 plain
+ours_external clip_vitb 2 plain
+ours_external clip_vitb 3 plain
+ours_external clip_vitb 4 plain
+ours_external dinov3_convnext_b 0 plain
+ours_external dinov3_convnext_b 1 plain
+ours_external dinov3_convnext_b 2 plain
+ours_external dinov3_convnext_b 3 plain
+ours_external dinov3_convnext_b 4 plain
+# Classic ImageNet CNNs (folds 0-4)
+ours_external resnet50_in1k 0 plain
+ours_external resnet50_in1k 1 plain
+ours_external resnet50_in1k 2 plain
+ours_external resnet50_in1k 3 plain
+ours_external resnet50_in1k 4 plain
+ours_external efficientnet_b3_in1k 0 plain
+ours_external efficientnet_b3_in1k 1 plain
+ours_external efficientnet_b3_in1k 2 plain
+ours_external efficientnet_b3_in1k 3 plain
+ours_external efficientnet_b3_in1k 4 plain
+ours_external convnext_b_in22k 0 plain
+ours_external convnext_b_in22k 1 plain
+ours_external convnext_b_in22k 2 plain
+ours_external convnext_b_in22k 3 plain
+ours_external convnext_b_in22k 4 plain
+# Part-based local feature fusion (folds 0-4); global baselines: dinov3_convnext_b, resnet50_in1k
+ours_external dinov3_convnext_b_parts_mean 0 plain
+ours_external dinov3_convnext_b_parts_mean 1 plain
+ours_external dinov3_convnext_b_parts_mean 2 plain
+ours_external dinov3_convnext_b_parts_mean 3 plain
+ours_external dinov3_convnext_b_parts_mean 4 plain
+ours_external dinov3_convnext_b_parts_transformer 0 plain
+ours_external dinov3_convnext_b_parts_transformer 1 plain
+ours_external dinov3_convnext_b_parts_transformer 2 plain
+ours_external dinov3_convnext_b_parts_transformer 3 plain
+ours_external dinov3_convnext_b_parts_transformer 4 plain
+ours_external resnet50_in1k_parts_mean 0 plain
+ours_external resnet50_in1k_parts_mean 1 plain
+ours_external resnet50_in1k_parts_mean 2 plain
+ours_external resnet50_in1k_parts_mean 3 plain
+ours_external resnet50_in1k_parts_mean 4 plain
+ours_external resnet50_in1k_parts_transformer 0 plain
+ours_external resnet50_in1k_parts_transformer 1 plain
+ours_external resnet50_in1k_parts_transformer 2 plain
+ours_external resnet50_in1k_parts_transformer 3 plain
+ours_external resnet50_in1k_parts_transformer 4 plain
+# LAION-2B fine-tuning (folds 0-4)
+ours_external convnext_b_clip_laion 0 plain
+ours_external convnext_b_clip_laion 1 plain
+ours_external convnext_b_clip_laion 2 plain
+ours_external convnext_b_clip_laion 3 plain
+ours_external convnext_b_clip_laion 4 plain
+ours_external clip_vitl_laion 0 plain train.image_size=336
+ours_external clip_vitl_laion 1 plain train.image_size=336
+ours_external clip_vitl_laion 2 plain train.image_size=336
+ours_external clip_vitl_laion 3 plain train.image_size=336
+ours_external clip_vitl_laion 4 plain train.image_size=336
+# Strongest system (#6): DINOv3 ViT-L, longer schedule (folds 0-4)
+ours_external dinov3_vitl 0 plain train.epochs=20
+ours_external dinov3_vitl 1 plain train.epochs=20
+ours_external dinov3_vitl 2 plain train.epochs=20
+ours_external dinov3_vitl 3 plain train.epochs=20
+ours_external dinov3_vitl 4 plain train.epochs=20
