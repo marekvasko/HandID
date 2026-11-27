@@ -6,6 +6,7 @@
 Writes to the Hydra output dir (outputs/<variant>/<model>/fold<k>/):
     results.json   all metrics of every test set
     scores.npz     raw comparison scores (for ROC curves in the report)
+    embeddings.npz test-set embeddings (for scripts/audit_sessions.py)
 and logs the same to MLflow (experiment ``mlflow.experiment``).
 """
 
@@ -63,14 +64,19 @@ def main(cfg: DictConfig) -> None:
     out_dir = Path(HydraConfig.get().runtime.output_dir)
 
     # ---- data -------------------------------------------------------------------------------
-    train_df, test_sets = split_train_test(load_manifests(cfg.paths.manifest_dir), cfg.variant.datasets, cfg.fold)
+    manifests = load_manifests(cfg.paths.manifest_dir)
+    if cfg.input.name == "masked":  # same crops, background removed (cached next to the plain ones)
+        for df in manifests.values():
+            df["path"] = df["path"].str.replace(cfg.paths.aligned_dir, cfg.paths.aligned_dir + "_masked", regex=False)
+    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold)
     print(describe(train_df, test_sets))
 
     # ---- logging ----------------------------------------------------------------------------
-    run_name = f"{cfg.variant.name}-{cfg.model.name}-fold{cfg.fold}"
+    run_name = f"{cfg.variant.name}-{cfg.model.name}{cfg.input.suffix}-fold{cfg.fold}"
     logger = MLFlowLogger(experiment_name=cfg.mlflow.experiment, run_name=run_name,
                           tracking_uri=cfg.mlflow.tracking_uri,
-                          tags={"variant": cfg.variant.name, "model": cfg.model.name, "fold": str(cfg.fold),
+                          tags={"variant": cfg.variant.name, "model": cfg.model.name, "input": cfg.input.name,
+                                "fold": str(cfg.fold),
                                 "git_commit": git_commit()})
     logger.log_hyperparams(flatten(OmegaConf.to_container(cfg.train), "train")
                            | {f"model/{k}": v for k, v in cfg.model.items()}
@@ -95,9 +101,10 @@ def main(cfg: DictConfig) -> None:
                    out_dir / "model.pt")
 
     # ---- evaluation -------------------------------------------------------------------------
-    results, raw_scores = {}, {}
+    results, raw_scores, embeddings = {}, {}, {}
     for name, df in test_sets.items():
         emb = embed(model, df, cfg)
+        embeddings[name] = emb  # rows follow the manifest order of this test set
         evaluate = protocols.evaluate_ours if name.startswith("ours/") else protocols.evaluate_external
         results[name], raw = evaluate(df, emb)
         for protocol, arrays in raw.items():
@@ -107,11 +114,13 @@ def main(cfg: DictConfig) -> None:
 
     (out_dir / "results.json").write_text(json.dumps(results, indent=2))
     np.savez_compressed(out_dir / "scores.npz", **raw_scores)
+    np.savez_compressed(out_dir / "embeddings.npz", **embeddings)
     client, run_id = logger.experiment, logger.run_id
     for k, v in flatten(results, "test").items():
         client.log_metric(run_id, k, v)
     client.log_artifact(run_id, str(out_dir / "results.json"))
     client.log_artifact(run_id, str(out_dir / ".hydra" / "config.yaml"))
+    logger.finalize("success")  # closes the MLflow run (needed when there was no training)
 
 
 if __name__ == "__main__":

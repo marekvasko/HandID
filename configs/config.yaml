@@ -6,6 +6,7 @@
 defaults:
   - paths: default
   - model: dinov3_vitb
+  - input: plain
   - _self_
   - variant: ours_external   # after _self_: a variant may override train.* / model.*
 
@@ -31,9 +32,9 @@ save_model: false   # store the trained weights (only for the final model)
 
 hydra:
   run:
-    dir: outputs/${variant.name}/${model.name}/fold${fold}
+    dir: outputs/${variant.name}/${model.name}${input.suffix}/fold${fold}
   sweep:
-    dir: outputs/${variant.name}/${model.name}
+    dir: outputs/${variant.name}/${model.name}${input.suffix}
     subdir: fold${fold}
   job:
     chdir: false

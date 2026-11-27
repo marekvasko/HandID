@@ -1,0 +1,4 @@
+# Aligned hand crops with the background blacked out by a landmark-based hand mask
+# (see src/handid/align.py: hand_mask). Images without detected landmarks stay unmasked.
+name: masked
+suffix: _masked
