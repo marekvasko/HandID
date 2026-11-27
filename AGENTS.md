@@ -40,11 +40,72 @@ src/handid/
 scripts/
   prepare_data.py        step 1: unpack, build manifests, cache aligned crops
   train.py               step 2: train one (variant, model, fold) and evaluate
-  run_all.sh             step 2 for every experiment in the reports
+  queue.sh               step 2 as a GPU queue over configs/queue.txt (re-read before every run)
+  audit_sessions.py      flags sessions that do not match their own hand (label errors)
   make_report.py         step 3: reports/*.md + figures, uploaded to MLflow
 tests/                   pytest sanity checks of the evaluation code
 reports/                 generated reports (markdown, rendered by GitHub)
 ```
+
+## Workflow: idea -> issue -> branch -> queued runs -> report -> PR
+
+Every change of behaviour or every experiment follows the same path, so each result can be
+traced from a GitHub issue to the exact MLflow runs that produced it.
+
+1. **Issue.** Open a GitHub issue per idea with the question, the hypothesis and the planned
+   runs (variants, models, folds). Label it `experiment` or `performance`.
+2. **Branch.** One branch per idea: `exp/<idea>` or `perf/<topic>`, created from `main`
+   (or stacked on the branch it needs; the PR then targets that branch).
+3. **Smoke test** with tiny settings and the dev MLflow experiment, never on the real one:
+   `train.epochs=1 train.limit_train_batches=20 train.batch_size=16 mlflow.experiment=handid-dev
+   hydra.run.dir=outputs_dev/<name>`. Do not edit code in the checkout the GPU queue runs from;
+   use a `git worktree` and merge when tested (the queue imports the code at every run start).
+4. **Queue the real runs** by appending lines to `configs/queue.txt`. One GPU job at a time:
+   two trainings on one GPU run out of memory and invalidate both.
+5. **Report.** `uv run scripts/make_report.py` writes `reports/experiments/<idea>.md` from
+   the finished runs. Add the written conclusion to `reports/conclusions.json`.
+6. **PR** with the results (rules below), `Closes #<issue>`. Only the repository owner merges.
+
+### Pre-defined test configuration (never change it inside an experiment)
+
+* **Our dataset:** people-disjoint folds `fold_0 … fold_9` from `kfolds_people`. A run with
+  `fold=k` never sees fold k in training. Main systems use all 10 folds; ablations use folds
+  0-4 and are compared *paired* with the reference system on exactly the same folds.
+* **External:** fixed subject-disjoint test splits of 11k (38 people) and HD (143 people),
+  `external_test_fraction=0.2`, `seed=0`. Never used for training or tuning.
+* **Protocols** (`src/handid/protocols.py`): image-vs-image same-session and **cross-session**
+  (headline), session templates, rank-1; same side only; every hand weighted equally.
+* **Metrics:** EER and TAR@FAR=1 % / 0.1 % (mean ± std over folds), rank-1; DET curves pool
+  the held-out scores of all folds.
+* **Training defaults** (`configs/config.yaml`): 384 px, batch 64, 15 epochs, seed 0, bf16.
+  If an experiment needs a different value, it is part of the experiment and must be stated.
+* No hyper-parameter is chosen by looking at a test fold. If tuning is needed, tune on the
+  training folds (e.g. hold out one training fold) and say so in the PR.
+
+### Rules for experiment PRs (`exp/*`)
+
+An experiment PR must contain, in its description:
+1. The question and a link to the issue.
+2. **Exact results on the pre-defined test configuration**: the table from
+   `reports/experiments/<idea>.md` (EER cross-session with the paired Δ to the reference,
+   TAR@FAR=1 %, session-template EER, same-session EER, rank-1, 11k / HD EER), with the folds used.
+3. **Links to every MLflow run** behind the numbers (one per system and fold) and to the
+   MLflow experiment. `make_report.py` writes them into the report's "Runs" section.
+4. The git commit the runs were trained with (MLflow tag `git_commit`) and any setting that
+   deviates from the defaults.
+5. A conclusion that a reader can act on, including negative results ("no improvement" is a result).
+
+### Rules for performance PRs (`perf/*`)
+
+A performance PR must show a **measurable improvement of the same configuration on the same
+machine and setup**, before vs after, measured back to back:
+* same model, image size, batch size, precision, number of workers, data and GPU,
+* the measured quantities: training throughput (it/s or images/s), time per step split into
+  data loading / augmentation / forward+backward, sustained GPU utilisation
+  (`nvidia-smi --query-gpu=utilization.gpu --format=csv -l 1` during training), peak memory,
+* the exact commands used, and the machine (GPU, CPU cores, other load),
+* a check that results did not change beyond noise (same EER on one fold) or an explanation why
+  they may (e.g. a different augmentation).
 
 ## Common commands
 
@@ -52,7 +113,7 @@ reports/                 generated reports (markdown, rendered by GitHub)
 uv sync                                               # install
 uv run scripts/prepare_data.py                        # once
 uv run scripts/train.py variant=ours_external fold=3  # one run
-uv run scripts/train.py -m variant=ours_only fold=0,1,2,3,4,5,6,7,8,9
+setsid nohup bash scripts/queue.sh > outputs_dev/queue.log 2>&1 &   # run everything in configs/queue.txt
 uv run scripts/make_report.py
 uv run pytest
 ```
