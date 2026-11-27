@@ -23,6 +23,7 @@ import random
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 COLUMNS = ["dataset", "subject", "side", "identity", "session", "split", "src_path"]
 
@@ -40,7 +41,7 @@ def _subject_split(subjects: list[str], test_fraction: float, seed: int) -> dict
     return {s: ("test" if i < n_test else "train") for i, s in enumerate(subjects)}
 
 
-def build_ours(root: Path, private_dir: Path) -> pd.DataFrame:
+def build_ours(root: Path, private_dir: Path, label_fixes: Path | None = None) -> pd.DataFrame:
     """Our dataset: <root>/fold_k/<person name>/<left|right>/<session>/<image>.jpg"""
     rows = []
     for path in sorted(root.rglob("*.jpg")):
@@ -55,8 +56,21 @@ def build_ours(root: Path, private_dir: Path) -> pd.DataFrame:
     pd.Series(name_to_id, name="subject").rename_axis("name").to_csv(private_dir / "ours_name_to_id.csv")
     df["subject"] = df["name"].map(name_to_id)
 
+    if label_fixes is not None and label_fixes.exists():
+        df = apply_side_swaps(df, yaml.safe_load(label_fixes.read_text()).get("side_swaps", []))
     df = _drop_exact_duplicates(df)
     return _finish(df)
+
+
+def apply_side_swaps(df: pd.DataFrame, swaps: list[dict]) -> pd.DataFrame:
+    """Move sessions that were stored under the wrong hand to the other hand (configs/label_fixes.yaml)."""
+    df = df.copy()
+    for fix in swaps:
+        rows = (df.subject == fix["subject"]) & (df.side == fix["side"]) & (df.session == str(fix["session"]))
+        assert rows.any(), f"label fix matches no images: {fix}"
+        df.loc[rows, "side"] = "right" if fix["side"] == "left" else "left"
+        print(f"[ours] label fix: {fix['subject']} session {fix['session']} {fix['side']} -> other hand ({rows.sum()} images)")
+    return df
 
 
 def _drop_exact_duplicates(df: pd.DataFrame) -> pd.DataFrame:

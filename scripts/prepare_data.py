@@ -88,7 +88,8 @@ def mask_manifest(df: pd.DataFrame, cfg: DictConfig) -> None:
 def main(cfg: DictConfig) -> None:
     unpack_external(Path(cfg.paths.external_archives), Path(cfg.paths.external_dir))
     builders = {
-        "ours": lambda: manifests.build_ours(Path(cfg.paths.ours_root), Path(cfg.paths.private_dir)),
+        "ours": lambda: manifests.build_ours(Path(cfg.paths.ours_root), Path(cfg.paths.private_dir),
+                                             Path(__file__).resolve().parents[1] / "configs" / "label_fixes.yaml"),
         "11k": lambda: manifests.build_11k(Path(cfg.paths.external_dir), cfg.external_test_fraction, cfg.seed),
         "hd": lambda: manifests.build_hd(Path(cfg.paths.external_dir), cfg.external_test_fraction, cfg.seed),
     }

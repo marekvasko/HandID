@@ -1,0 +1,15 @@
+{
+  "sessions_total": 916,
+  "sessions_of_hands_with_2plus_sessions": 853,
+  "model_audit_judge": "ours_only DINOv3 ViT-B, each fold judged by the model that did not see it",
+  "model_flag_no_match_at_far1pct": 301,
+  "model_flag_other_side_closer": 152,
+  "model_flag_other_person_closer": 179,
+  "geometric_check": "MediaPipe on canonical crops: thumb must be left of the little finger",
+  "images_canonical_ok_pct": 97.8,
+  "images_wrong_side_pct": 0.6,
+  "images_undetected_pct": 1.5,
+  "sessions_side_swapped": 4,
+  "people_with_side_swapped_session": 4,
+  "other_side_closer_flags_confirmed_by_geometry": 1
+}
