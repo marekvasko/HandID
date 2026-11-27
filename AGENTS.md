@@ -64,7 +64,10 @@ traced from a GitHub issue to the exact MLflow runs that produced it.
    two trainings on one GPU run out of memory and invalidate both.
 5. **Report.** `uv run scripts/make_report.py` writes `reports/experiments/<idea>.md` from
    the finished runs. Add the written conclusion to `reports/conclusions.json`.
-6. **PR** with the results (rules below), `Closes #<issue>`. Only the repository owner merges.
+6. **PR** with the results (rules below), `Closes #<issue>`.
+7. **Merge only with explicit approval.** A PR is merged only after the repository owner
+   explicitly approves merging *that* PR. Approval of one PR never carries over to another one;
+   agents never merge on their own initiative.
 
 ### Pre-defined test configuration (never change it inside an experiment)
 
@@ -84,7 +87,11 @@ traced from a GitHub issue to the exact MLflow runs that produced it.
 
 ### Rules for experiment PRs (`exp/*`)
 
-An experiment PR must contain, in its description:
+An experiment PR must contain **the full report in the PR description itself** (not only a
+link to a file): paste `reports/experiments/<idea>.md` as the body, with figure paths turned
+into absolute GitHub URLs so they render, e.g.
+`gh pr create --body-file <(sed 's#](\.\./figures/#](https://github.com/<owner>/HandID/raw/<branch>/reports/figures/#g' reports/experiments/<idea>.md)`.
+The description must contain:
 1. The question and a link to the issue.
 2. **Exact results on the pre-defined test configuration**: the table from
    `reports/experiments/<idea>.md` (EER cross-session with the paired Δ to the reference,
@@ -97,6 +104,7 @@ An experiment PR must contain, in its description:
 
 ### Rules for performance PRs (`perf/*`)
 
+The measurements and their tables go into the PR description itself.
 A performance PR must show a **measurable improvement of the same configuration on the same
 machine and setup**, before vs after, measured back to back:
 * same model, image size, batch size, precision, number of workers, data and GPU,
