@@ -19,7 +19,7 @@ from pathlib import Path
 import mediapipe as mp
 import numpy as np
 from mediapipe.tasks.python import BaseOptions, vision
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 WRIST, MIDDLE_MCP = 0, 9  # MediaPipe landmark indices
 
@@ -90,6 +90,43 @@ class HandAligner:
         return crop.resize((self.out_size, self.out_size), Image.BICUBIC), method
 
 
+# --- background removal ---------------------------------------------------------------------
+PALM = [0, 1, 2, 5, 9, 13, 17]                        # outline of the back of the hand
+FINGERS = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]]
+
+
+def hand_mask(pts: np.ndarray, size: tuple[int, int], width_scale: float = 0.9) -> Image.Image:
+    """Approximate hand silhouette drawn from the 21 landmarks ("skeleton mask").
+
+    Palm polygon + a thick stroke along every finger + a disc over the wrist. Finger width is
+    tied to the distance between neighbouring knuckles, so the mask scales with the hand.
+    """
+    mask = Image.new("L", size, 0)
+    draw = ImageDraw.Draw(mask)
+    p = [tuple(map(float, q)) for q in pts]
+    knuckle_gap = float(np.linalg.norm(pts[5] - pts[9]))
+    width = max(int(knuckle_gap * width_scale), 3)
+    draw.polygon([p[i] for i in PALM], fill=255)
+    for finger in FINGERS:
+        draw.line([p[i] for i in finger], fill=255, width=width, joint="curve")
+        for i in finger:  # round joints and finger tips
+            draw.ellipse([p[i][0] - width / 2, p[i][1] - width / 2, p[i][0] + width / 2, p[i][1] + width / 2], fill=255)
+    hand_width = float(np.linalg.norm(pts[5] - pts[17]))
+    wx, wy = p[0]
+    draw.ellipse([wx - hand_width * 0.6, wy - hand_width * 0.45, wx + hand_width * 0.6, wy + hand_width * 0.45], fill=255)
+    # grow a little and soften the edge
+    return mask.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(3))
+
+
+def mask_crop(aligner: HandAligner, crop: Image.Image) -> tuple[Image.Image, bool]:
+    """Black out the background of an aligned crop. Returns (image, whether a mask was applied)."""
+    pts = aligner.landmarks(crop)
+    if pts is None:
+        return crop, False
+    black = Image.new("RGB", crop.size, (0, 0, 0))
+    return Image.composite(crop, black, hand_mask(pts, crop.size)), True
+
+
 # --- multiprocessing helpers (one detector per worker process) ---------------------------------
 _worker: HandAligner | None = None
 
@@ -108,3 +145,11 @@ def align_one(job: tuple[str, str, str, str]) -> str:
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     crop.save(dst, quality=95)
     return method
+
+
+def mask_one(job: tuple[str, str]) -> str:
+    src, dst = job
+    masked, ok = mask_crop(_worker, Image.open(src).convert("RGB"))
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    masked.save(dst, quality=95)
+    return "masked" if ok else "unmasked"

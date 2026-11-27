@@ -69,6 +69,17 @@ def label(system: tuple[str, str]) -> str:
     return f"{VARIANT_LABEL.get(variant, variant)} · {model}"
 
 
+SHORT_VARIANT = {"zero_shot": "zero-shot", "external_only": "11k+HD", "ours_only": "ours",
+                 "ours_external": "ours+11k+HD"}
+SHORT_MODEL = {"dinov3_vitb": "", "dinov3_vitb_masked": "\nmasked", "dinov3_vitl": "\nViT-L",
+               "dinov3_vitl_masked": "\nViT-L masked"}
+
+
+def short_label(system: tuple[str, str]) -> str:
+    variant, model = system
+    return SHORT_VARIANT.get(variant, variant) + SHORT_MODEL.get(model, f"\n{model}")
+
+
 def colour(i: int) -> str:
     return PALETTE[i % len(PALETTE)]
 
@@ -99,22 +110,36 @@ def pooled_scores(sys: dict, protocol: str) -> tuple[np.ndarray, np.ndarray, np.
 # ---------------------------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------------------------
-def fig_roc(systems: dict, protocol: str, title: str, path: Path) -> None:
-    from sklearn.metrics import roc_curve
-    fig, ax = plt.subplots(figsize=(5.2, 3.6))
+def fig_det(systems: dict, protocol: str, title: str, path: Path) -> None:
+    """DET curve: false non-match rate vs. false match rate, both on a normal-deviate (probit)
+    scale - the standard biometric plot. Lower-left is better; the dashed diagonal is FMR = FNMR,
+    so a curve crosses it at its EER."""
+    from scipy.stats import norm
+    from sklearn.metrics import det_curve
+
+    ticks = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.6]
+    tick_labels = ["0.1", "0.5", "1", "2", "5", "10", "20", "40", "60"]
+    lo, hi = norm.ppf(0.0008), norm.ppf(0.7)
+    fig, ax = plt.subplots(figsize=(5.2, 4.2))
+    ax.plot([lo, hi], [lo, hi], color=MUTED, lw=0.8, ls="--")
+    ax.annotate("EER line", (norm.ppf(0.3), norm.ppf(0.3)), fontsize=7, color=MUTED, rotation=45,
+                ha="center", va="bottom")
     for i, (system, sys) in enumerate(systems.items()):
         if not sys["scores"]:
             continue
         s, g, w = pooled_scores(sys, protocol)
-        far, tar, _ = roc_curve(g, s, sample_weight=w)
-        ax.plot(np.clip(far, 1e-4, 1), tar, color=colour(i), lw=2, label=label(system))
-    ax.set_xscale("log")
-    ax.set_xlim(1e-3, 1)
-    ax.set_ylim(0, 1.01)
-    ax.set_xlabel("False accept rate (log scale)")
-    ax.set_ylabel("True accept rate")
+        fmr, fnmr, _ = det_curve(g, s, sample_weight=w)
+        ax.plot(norm.ppf(np.clip(fmr, 1e-5, 1 - 1e-5)), norm.ppf(np.clip(fnmr, 1e-5, 1 - 1e-5)),
+                color=colour(i), lw=2, label=label(system))
+    ax.set_xticks(norm.ppf(ticks), tick_labels)
+    ax.set_yticks(norm.ppf(ticks), tick_labels)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    ax.set_xlabel("False match rate (%)  - impostors accepted")
+    ax.set_ylabel("False non-match rate (%)  - genuine rejected")
     ax.set_title(title, loc="left", color=INK, fontsize=10)
-    ax.legend(loc="lower right", fontsize=7.5)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=7.5)
     fig.savefig(path)
     plt.close(fig)
 
@@ -124,7 +149,7 @@ def fig_eer_dots(systems: dict, path: Path) -> None:
     protocols = [("image_same_session", "Image vs image,\nsame session"),
                  ("image_cross_session", "Image vs image,\ndifferent session"),
                  ("session_template", "Session vs session\n(averaged embeddings)")]
-    fig, axes = plt.subplots(1, 3, figsize=(9, 3.2), sharey=True)
+    fig, axes = plt.subplots(1, 3, figsize=(max(9, 1.6 * len(systems) * 3 / 2), 3.4), sharey=True)
     for ax, (protocol, title) in zip(axes, protocols):
         for i, (system, sys) in enumerate(systems.items()):
             v = fold_values(sys, protocol, "eer") * 100
@@ -136,8 +161,8 @@ def fig_eer_dots(systems: dict, path: Path) -> None:
             ax.annotate(f"{v.mean():.1f}", (i + 0.32, v.mean()), fontsize=7.5, color=INK, va="center")
         ax.set_title(title, loc="left", fontsize=9, color=INK)
         ax.set_xticks(range(len(systems)))
-        ax.set_xticklabels([str(i + 1) for i in range(len(systems))])
-        ax.set_xlabel("system #")
+        ax.set_xticklabels([short_label(sy) for sy in systems], fontsize=7.5)
+        ax.set_xlabel("trained on")
     axes[0].set_ylabel("EER per held-out fold (%)")
     fig.savefig(path)
     plt.close(fig)
@@ -277,10 +302,13 @@ Rank-1 is measured within one fold (≈ 8–9 people, ≈ 15 hands), so it is an
 
 ![EER per fold](figures/task1_eer_per_fold.png)
 
-ROC curves pool the scores of all held-out folds (each fold scored by the model that did not see it):
+DET curves (detection error trade-off: both error rates on a probit scale, lower-left is better,
+a curve crosses the dashed diagonal at its EER). They pool the scores of all held-out folds,
+each fold scored by the model that did not see it:
 
-![ROC cross-session](figures/task1_roc_cross_session.png)
-![ROC session template](figures/task1_roc_session_template.png)
+![DET cross-session](figures/task1_det_cross_session.png)
+![DET same session](figures/task1_det_same_session.png)
+![DET session template](figures/task1_det_session_template.png)
 
 {{conclusion}}
 
@@ -345,8 +373,9 @@ def main(cfg: DictConfig) -> None:
 
     fig_sessions_hist(manifests["ours"], FIGS / "sessions_per_hand.png")
     fig_eer_dots(systems, FIGS / "task1_eer_per_fold.png")
-    fig_roc(systems, "image_cross_session", "Image vs image, different sessions", FIGS / "task1_roc_cross_session.png")
-    fig_roc(systems, "session_template", "Session vs session (averaged embeddings)", FIGS / "task1_roc_session_template.png")
+    fig_det(systems, "image_same_session", "Image vs image, same session", FIGS / "task1_det_same_session.png")
+    fig_det(systems, "image_cross_session", "Image vs image, different sessions", FIGS / "task1_det_cross_session.png")
+    fig_det(systems, "session_template", "Session vs session (averaged embeddings)", FIGS / "task1_det_session_template.png")
 
     hd_test = manifests["hd"].query("split == 'test'").subject.nunique()
     (REPORTS / "data.md").write_text(data_report(manifests))

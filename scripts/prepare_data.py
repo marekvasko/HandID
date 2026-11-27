@@ -6,6 +6,7 @@ Produces in ``paths.data_dir``:
     external/            unpacked 11k Hands + HD archives
     manifests/<ds>.csv   one row per image (see src/handid/manifests.py)
     aligned/<ds>/...     canonical hand crops (see src/handid/align.py)
+    aligned_masked/...   the same crops with the background blacked out (input=masked)
 """
 
 import zipfile
@@ -68,6 +69,21 @@ def align_manifest(df: pd.DataFrame, cfg: DictConfig) -> pd.DataFrame:
     return df
 
 
+def mask_manifest(df: pd.DataFrame, cfg: DictConfig) -> None:
+    """Write a background-masked copy of every aligned crop to ``<aligned_dir>_masked``."""
+    src_root, dst_root = cfg.paths.aligned_dir, cfg.paths.aligned_dir + "_masked"
+    todo = [(p, p.replace(src_root, dst_root, 1)) for p in df["path"]]
+    todo = [job for job in todo if not Path(job[1]).exists()]
+    if not todo:
+        return
+    init_args = (cfg.paths.hand_landmarker, cfg.align.out_size, cfg.align.margin)
+    with Pool(cfg.align.workers, initializer=align.init_worker, initargs=init_args) as pool:
+        results = list(tqdm(pool.imap(align.mask_one, todo, chunksize=8), total=len(todo),
+                            desc=f"mask {df.dataset.iloc[0]}"))
+    print(f"[{df.dataset.iloc[0]}] masked {results.count('masked') / len(results) * 100:.1f} % "
+          "(the rest: no hand found in the crop, kept unmasked)")
+
+
 @hydra.main(config_path="../configs", config_name="prepare", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     unpack_external(Path(cfg.paths.external_archives), Path(cfg.paths.external_dir))
@@ -83,6 +99,7 @@ def main(cfg: DictConfig) -> None:
         df.to_csv(out_dir / f"{name}.csv", index=False)
         print(f"[{name}] {len(df)} images, {df.subject.nunique()} subjects, {df.identity.nunique()} identities")
         print(df["align"].value_counts(normalize=True).round(3).to_string())
+        mask_manifest(df, cfg)
 
 
 if __name__ == "__main__":
