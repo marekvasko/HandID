@@ -1,0 +1,11 @@
+# Where things live on this machine. Override on the command line, e.g.
+#   uv run scripts/train.py paths.data_dir=/other/place
+# Local copy of the network share (the sshfs mount is flaky under parallel load; copy it with rsync)
+ours_root: /mnt/hdd/Datasets/HandBiometry_local/kfolds_people  # <fold_k>/<person>/<left|right>/<session>/<img>.jpg
+external_archives: /mnt/hdd/Datasets/Hands                      # Hands.zip (11k Hands) + HD.7z (PolyU HD, really a RAR)
+data_dir: ${hydra:runtime.cwd}/data                              # everything derived lives here (gitignored)
+external_dir: ${.data_dir}/external                              # unpacked archives
+aligned_dir: ${.data_dir}/aligned                                # hand crops, upright, left hands mirrored
+manifest_dir: ${.data_dir}/manifests                             # one CSV per dataset
+private_dir: ${.data_dir}/private                                # name -> anonymous id map. NEVER commit.
+hand_landmarker: ${.data_dir}/models/hand_landmarker.task

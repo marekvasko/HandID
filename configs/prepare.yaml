@@ -1,0 +1,18 @@
+# uv run scripts/prepare_data.py
+# Unpacks the external archives, builds manifests and caches aligned hand crops.
+defaults:
+  - paths: default
+  - _self_
+
+external_test_fraction: 0.2   # subject-disjoint hold-out of 11k and HD, never used for training
+seed: 0
+align:
+  out_size: 448               # cached crop size; training uses smaller random crops of it
+  margin: 1.3                 # crop side = 1.3 x landmark bounding box
+  workers: 16
+
+hydra:
+  run:
+    dir: data/logs/prepare/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false

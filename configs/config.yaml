@@ -1,0 +1,39 @@
+# Main training / evaluation config.  One run = one (variant, model, fold).
+#
+#   uv run scripts/train.py                                  # defaults below
+#   uv run scripts/train.py variant=ours_only fold=3         # another variant / fold
+#   uv run scripts/train.py -m fold=0,1,2,3,4,5,6,7,8,9      # all folds (Hydra multirun)
+defaults:
+  - paths: default
+  - model: dinov3_vitb
+  - _self_
+  - variant: ours_external   # after _self_: a variant may override train.* / model.*
+
+fold: 0          # which fold of OUR dataset is held out for testing (0-9)
+seed: 0
+
+train:
+  epochs: 15
+  batch_size: 64
+  image_size: 384          # hand crops are cached at 448 px
+  balance_power: 0.5       # identity balancing of the sampler, see data.py
+  num_workers: 12
+  precision: bf16-mixed
+
+eval:
+  batch_size: 128
+
+mlflow:
+  tracking_uri: https://mlflow.capturemyhand.com   # credentials are read from ~/.mlflow/credentials
+  experiment: handid-dorsal
+
+save_model: false   # store the trained weights (only for the final model)
+
+hydra:
+  run:
+    dir: outputs/${variant.name}/${model.name}/fold${fold}
+  sweep:
+    dir: outputs/${variant.name}/${model.name}
+    subdir: fold${fold}
+  job:
+    chdir: false

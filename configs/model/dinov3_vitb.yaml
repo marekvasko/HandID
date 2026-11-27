@@ -1,0 +1,11 @@
+# DINOv3 ViT-B/16 (86 M params), self-supervised on 1.7 B images.
+name: dinov3_vitb
+backbone: vit_base_patch16_dinov3.lvd1689m
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 3.0e-5
+layer_decay: 0.8       # block k of 12 gets lr * 0.8^(12-k): early, generic layers move less
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

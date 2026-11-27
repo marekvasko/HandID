@@ -1,0 +1,4 @@
+# @package _global_
+variant:
+  name: external_only
+  datasets: [11k, hd]   # which datasets are used for training

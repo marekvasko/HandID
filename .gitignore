@@ -1,0 +1,13 @@
+# Data, models and run outputs never go to git (privacy + size)
+data/
+outputs/
+multirun/
+mlruns/
+lightning_logs/
+*.ckpt
+*.pt
+.venv/
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+outputs_dev/

@@ -1,0 +1,9 @@
+# @package _global_
+# Baseline: the pretrained backbone without any training; embedding = raw backbone features.
+variant:
+  name: zero_shot
+  datasets: []
+model:
+  embedding_dim: null
+train:
+  epochs: 0
