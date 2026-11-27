@@ -37,11 +37,19 @@ class ArcFace(nn.Module):
 
 
 class HandEmbedder(nn.Module):
-    """timm backbone + (optional) linear projection to an embedding."""
+    """timm backbone + (optional) linear projection to an embedding.
 
-    def __init__(self, backbone: str, embedding_dim: int | None, pretrained: bool = True):
+    Input: float images in [0, 1]. Normalisation uses the statistics the backbone was
+    pre-trained with (ImageNet for DINO, 0.5/0.5 for SigLIP, CLIP's own for CLIP).
+    """
+
+    def __init__(self, backbone: str, embedding_dim: int | None, pretrained: bool = True,
+                 timm_kwargs: dict | None = None):
         super().__init__()
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0)
+        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0, **(timm_kwargs or {}))
+        cfg = self.backbone.pretrained_cfg
+        self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
         feat = self.backbone.num_features
         # embedding_dim=None -> use raw backbone features (zero-shot baseline)
         self.head = nn.Sequential(nn.Linear(feat, embedding_dim), nn.BatchNorm1d(embedding_dim)) \
@@ -49,16 +57,16 @@ class HandEmbedder(nn.Module):
         self.dim = embedding_dim or feat
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.backbone(x))
+        return self.head(self.backbone((x - self.mean) / self.std))
 
 
 class HandIDModule(L.LightningModule):
     def __init__(self, num_classes: int, backbone: str, embedding_dim: int | None, arcface_scale: float,
                  arcface_margin: float, lr_backbone: float, lr_head: float, weight_decay: float,
-                 warmup_epochs: int, layer_decay: float = 1.0):
+                 warmup_epochs: int, layer_decay: float = 1.0, timm_kwargs: dict | None = None):
         super().__init__()
         self.save_hyperparameters()
-        self.net = HandEmbedder(backbone, embedding_dim)
+        self.net = HandEmbedder(backbone, embedding_dim, timm_kwargs=timm_kwargs)
         self.loss = ArcFace(self.net.dim, max(num_classes, 1), arcface_scale, arcface_margin)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

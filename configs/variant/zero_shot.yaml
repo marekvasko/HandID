@@ -2,6 +2,7 @@
 # Baseline: the pretrained backbone without any training; embedding = raw backbone features.
 variant:
   name: zero_shot
+  labels: identity            # identity | session (see data.py)
   datasets: []
 model:
   embedding_dim: null
