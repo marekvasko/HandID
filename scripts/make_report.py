@@ -286,6 +286,28 @@ def md_table(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def label_audit_section() -> str:
+    f = REPORTS / "label_audit_summary.json"
+    if not f.exists():
+        return ""
+    a = json.loads(f.read_text())
+    return f"""### Label audit
+
+Two independent checks of the session labels (`scripts/audit_sessions.py`):
+
+* **Model-based.** Every session is compared with the other sessions of the same hand by a model
+  that never saw that person (`ours_only`, held-out fold). {a['model_flag_no_match_at_far1pct']} of
+  {a['sessions_of_hands_with_2plus_sessions']} sessions do not reach the 1 %-FAR threshold against their own hand,
+  {a['model_flag_other_side_closer']} are closer to the person's other hand and {a['model_flag_other_person_closer']} to another
+  person. At ~14 % cross-session EER this mostly measures the model, not label errors.
+* **Geometric.** After canonicalisation every hand must look like a right hand (thumb left of the
+  little finger, MediaPipe). {a['images_canonical_ok_pct']} % of images pass, {a['images_wrong_side_pct']} % fail,
+  {a['images_undetected_pct']} % undetected. **{a['sessions_side_swapped']} sessions ({a['people_with_side_swapped_session']} people) were stored under the wrong
+  hand**; they are corrected in `configs/label_fixes.yaml` and all results use the corrected labels.
+  Only {a['other_side_closer_flags_confirmed_by_geometry']} of the model's "other hand is closer" flags was a real swap.
+"""
+
+
 def data_report(m: dict[str, pd.DataFrame]) -> str:
     rows = []
     for ds, df in m.items():
@@ -334,6 +356,8 @@ No example images are included in this repository to protect participants' priva
   Evaluation therefore weights every hand equally (see Task 1 report).
 
 ![Sessions per hand](figures/sessions_per_hand.png)
+
+{label_audit_section()}
 
 ### Folds
 
@@ -562,7 +586,9 @@ def main(cfg: DictConfig) -> None:
     hd_test = manifests["hd"].query("split == 'test'").subject.nunique()
     (REPORTS / "data.md").write_text(data_report(manifests))
     (REPORTS / "task1_session_feasibility.md").write_text(
-        task1_report(systems).replace("{conclusion}", conclusions.get("task1", "")))
+        task1_report(systems).replace("{conclusion}", conclusions.get("task1", ""))
+        + "\n" + runs_section(systems, sorted({f for v in systems.values() for f in v["ours"]},
+                                               key=lambda f: int(f.split("_")[1])), runs, experiment_url))
     (REPORTS / "experiments").mkdir(exist_ok=True)
     for key, idea in IDEAS.items():
         (REPORTS / "experiments" / f"{key}.md").write_text(
