@@ -1,0 +1,13 @@
+# Corrections of labelling errors in our dataset, applied when the manifest is built
+# (src/handid/manifests.py). Anonymous ids only - never put real names here.
+#
+# side_swaps: sessions stored under the wrong hand. Found by scripts/audit_sessions.py and
+# confirmed geometrically: after canonicalisation every crop of these sessions has the thumb on
+# the wrong side (MediaPipe landmarks), i.e. the photos show the other hand.
+# If the other hand already has a session with the same number, the photos join it: the same
+# number means the same capture round (ours_047: the photos were taken 5 min after its session 7).
+side_swaps:
+  - {subject: ours_031, side: left,  session: "3"}
+  - {subject: ours_032, side: left,  session: "3"}
+  - {subject: ours_047, side: right, session: "7"}
+  - {subject: ours_056, side: left,  session: "6"}

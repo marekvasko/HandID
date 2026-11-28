@@ -1,0 +1,13 @@
+# convnext_base.dinov3_lvd1689m with local part features (4x4 grid of the last feature map) fused by transformer. See PartFusion in model.py.
+name: dinov3_convnext_b_parts_transformer
+backbone: convnext_base.dinov3_lvd1689m
+pooling: parts_transformer
+grid: 4
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 5.0e-05
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

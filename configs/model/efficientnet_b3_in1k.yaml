@@ -1,0 +1,11 @@
+# EfficientNet-B3 (12 M), ImageNet-1k supervised.
+name: efficientnet_b3_in1k
+backbone: efficientnet_b3.ra2_in1k
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 2.0e-04
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

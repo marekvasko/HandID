@@ -1,0 +1,11 @@
+# ConvNeXt-B (89 M), ImageNet-22k supervised, fine-tuned on 1k.
+name: convnext_b_in22k
+backbone: convnext_base.fb_in22k_ft_in1k
+embedding_dim: 512
+arcface_scale: 30.0
+arcface_margin: 0.3
+lr_backbone: 5.0e-05
+layer_decay: 1.0       # layer-wise decay is implemented for ViT blocks only (1.0 = off)
+lr_head: 1.0e-3
+weight_decay: 0.05
+warmup_epochs: 1

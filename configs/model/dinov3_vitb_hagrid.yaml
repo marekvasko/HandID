@@ -1,0 +1,14 @@
+# Stage 2 of the HaGRID pre-training (issue #8): DINOv3 ViT-B/16 initialised from the stage-1 model
+# (variant=hagrid_external, trained on HaGRID + 11k + HD, never saw our data).
+#
+#   stage 1 (once):  uv run scripts/train.py variant=hagrid_external model=dinov3_vitb save_model=true
+#   stage 2:         uv run scripts/train.py -m variant=ours_external model=dinov3_vitb_hagrid fold=0,1,2,3,4
+#
+# Outputs land in outputs/<variant>/dinov3_vitb_hagrid/, next to the plain dinov3_vitb runs, so the
+# two initialisations can be compared fold by fold.
+defaults:
+  - dinov3_vitb
+  - _self_
+
+name: dinov3_vitb_hagrid
+init_from: ${hydra:runtime.cwd}/outputs/hagrid_external/dinov3_vitb/fold0/model.pt

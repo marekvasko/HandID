@@ -36,53 +36,126 @@ class ArcFace(nn.Module):
         return F.cross_entropy(logits, labels), cos
 
 
+class PartFusion(nn.Module):
+    """Embedding from LOCAL features of a convolutional feature map.
+
+    The aligned hand always has the same layout (fingers at the top, knuckles in the middle,
+    back of the hand at the bottom), so a fixed grid of regions roughly corresponds to hand
+    parts. Each region becomes a token (average of its feature-map cells + a learned position
+    embedding); tokens are fused by
+
+        mean          a small MLP per token, then the average  (order-free "deep sets" fusion)
+        transformer   2 transformer layers with a CLS token     (regions can attend to each other)
+
+    Compared with global average pooling of the whole map, the network keeps track of WHERE a
+    feature was seen, which matters for biometrics (a crease on the index knuckle is not the
+    same evidence as the same crease on the little finger).
+    """
+
+    def __init__(self, in_dim: int, dim: int, grid: int = 4, fusion: str = "transformer", layers: int = 2):
+        super().__init__()
+        self.grid, self.fusion = grid, fusion
+        self.proj = nn.Linear(in_dim, dim)
+        self.pos = nn.Parameter(torch.randn(1, grid * grid, dim) * 0.02)
+        if fusion == "mean":
+            self.token_mlp = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, dim))
+        elif fusion == "transformer":
+            self.cls = nn.Parameter(torch.zeros(1, 1, dim))
+            layer = nn.TransformerEncoderLayer(dim, nhead=8, dim_feedforward=4 * dim, dropout=0.1,
+                                               batch_first=True, norm_first=True)
+            self.encoder = nn.TransformerEncoder(layer, num_layers=layers)
+            self.norm = nn.LayerNorm(dim)
+        else:
+            raise ValueError(f"unknown fusion {fusion}")
+        self.bn = nn.BatchNorm1d(dim)
+
+    def forward(self, fmap: torch.Tensor) -> torch.Tensor:  # B x C x h x w
+        parts = F.adaptive_avg_pool2d(fmap, self.grid).flatten(2).transpose(1, 2)  # B x grid^2 x C
+        tokens = self.proj(parts) + self.pos
+        if self.fusion == "mean":
+            fused = (tokens + self.token_mlp(tokens)).mean(dim=1)
+        else:
+            x = torch.cat([self.cls.expand(len(tokens), -1, -1), tokens], dim=1)
+            fused = self.norm(self.encoder(x)[:, 0])
+        return self.bn(fused)
+
+
 class HandEmbedder(nn.Module):
-    """timm backbone + (optional) linear projection to an embedding.
+    """timm backbone + embedding head.
 
     Input: float images in [0, 1]. Normalisation uses the statistics the backbone was
     pre-trained with (ImageNet for DINO, 0.5/0.5 for SigLIP, CLIP's own for CLIP).
+
+    pooling
+        global        the backbone's own pooled features -> Linear -> BatchNorm  (default)
+        parts_mean    local regions of the CNN feature map, averaged (see PartFusion)
+        parts_transformer   local regions fused by a small transformer
+    embedding_dim=None -> raw backbone features (zero-shot baseline).
     """
 
     def __init__(self, backbone: str, embedding_dim: int | None, pretrained: bool = True,
-                 timm_kwargs: dict | None = None):
+                 timm_kwargs: dict | None = None, pooling: str = "global", grid: int = 4):
         super().__init__()
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0, **(timm_kwargs or {}))
+        self.pooling = pooling
+        extra = {} if pooling == "global" else {"global_pool": ""}  # keep the spatial feature map
+        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0,
+                                          **extra, **(timm_kwargs or {}))
         cfg = self.backbone.pretrained_cfg
         self.register_buffer("mean", torch.tensor(cfg["mean"]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(cfg["std"]).view(1, 3, 1, 1), persistent=False)
         feat = self.backbone.num_features
-        # embedding_dim=None -> use raw backbone features (zero-shot baseline)
-        self.head = nn.Sequential(nn.Linear(feat, embedding_dim), nn.BatchNorm1d(embedding_dim)) \
-            if embedding_dim else nn.Identity()
+        if pooling != "global":
+            self.head = PartFusion(feat, embedding_dim, grid, fusion=pooling.removeprefix("parts_"))
+        elif embedding_dim:
+            self.head = nn.Sequential(nn.Linear(feat, embedding_dim), nn.BatchNorm1d(embedding_dim))
+        else:
+            self.head = nn.Identity()
         self.dim = embedding_dim or feat
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.head(self.backbone((x - self.mean) / self.std))
+        x = (x - self.mean) / self.std
+        if self.pooling == "global":
+            return self.head(self.backbone(x))
+        return self.head(self.backbone.forward_features(x))
 
 
 class HandIDModule(L.LightningModule):
     def __init__(self, num_classes: int, backbone: str, embedding_dim: int | None, arcface_scale: float,
                  arcface_margin: float, lr_backbone: float, lr_head: float, weight_decay: float,
-                 warmup_epochs: int, layer_decay: float = 1.0, timm_kwargs: dict | None = None):
+                 warmup_epochs: int, layer_decay: float = 1.0, timm_kwargs: dict | None = None,
+                 metadata_classes: dict[str, int] | None = None, metadata_weight: float = 0.1,
+                 pooling: str = "global", grid: int = 4):
         super().__init__()
         self.save_hyperparameters()
-        self.net = HandEmbedder(backbone, embedding_dim, timm_kwargs=timm_kwargs)
+        self.net = HandEmbedder(backbone, embedding_dim, timm_kwargs=timm_kwargs, pooling=pooling, grid=grid)
         self.loss = ArcFace(self.net.dim, max(num_classes, 1), arcface_scale, arcface_margin)
+        # Optional auxiliary heads: predict metadata (gender, skin colour, ...) from the embedding.
+        self.metadata_heads = nn.ModuleDict({attr: nn.Linear(self.net.dim, n)
+                                             for attr, n in (metadata_classes or {}).items()})
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.normalize(self.net(x).float(), dim=1)
 
     def training_step(self, batch, _):
-        images, labels = batch
-        loss, cos = self.loss(self.net(images), labels)
-        acc = (cos.argmax(1) == labels).float().mean()
-        self.log_dict({"train/loss": loss, "train/acc": acc}, prog_bar=True, on_step=True, on_epoch=True)
+        images, labels, metadata = batch
+        emb = self.net(images)
+        loss, cos = self.loss(emb, labels)
+        logs = {"train/arcface": loss, "train/acc": (cos.argmax(1) == labels).float().mean()}
+        for k, (attr, head) in enumerate(self.metadata_heads.items()):
+            known = metadata[:, k] >= 0
+            if known.any():  # only 11k rows carry metadata
+                aux = F.cross_entropy(head(emb[known]).float(), metadata[known, k])
+                loss = loss + self.hparams.metadata_weight * aux
+                logs[f"train/meta_{attr}"] = aux
+        logs["train/loss"] = loss
+        self.log_dict(logs, prog_bar=False, on_step=True, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
         hp = self.hparams
         param_groups = self._backbone_param_groups(hp.lr_backbone, hp.layer_decay, hp.weight_decay)
-        param_groups.append({"params": [*self.net.head.parameters(), *self.loss.parameters()],
+        param_groups.append({"params": [*self.net.head.parameters(), *self.loss.parameters(),
+                                        *self.metadata_heads.parameters()],
                              "lr": hp.lr_head, "weight_decay": hp.weight_decay})
         opt = torch.optim.AdamW(param_groups)
         total = self.trainer.estimated_stepping_batches

@@ -24,7 +24,8 @@ from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
 from handid import protocols
-from handid.data import HandDataModule, describe, eval_loader, load_manifests, split_train_test, to_float
+from handid.data import (METADATA, HandDataModule, describe, eval_loader, load_manifests, metadata_targets,
+                         split_train_test, to_float)
 from handid.model import HandIDModule
 
 
@@ -32,7 +33,7 @@ from handid.model import HandIDModule
 def embed(model: HandIDModule, df: pd.DataFrame, banks: dict, cfg: DictConfig) -> np.ndarray:
     model.eval().cuda()
     out = []
-    for images, _ in eval_loader(df, banks, cfg.train.image_size, cfg.eval.batch_size, cfg.train.num_workers):
+    for images, _, _ in eval_loader(df, banks, cfg.train.image_size, cfg.eval.batch_size, cfg.train.num_workers):
         images = to_float(images.cuda(non_blocking=True))
         with torch.autocast("cuda", dtype=torch.bfloat16):
             out.append(model(images).cpu())
@@ -58,6 +59,25 @@ def git_commit() -> str:
         return "unknown"
 
 
+def git_dirty() -> str:
+    """'true' if code or configs differ from the commit (the queue list itself does not count)."""
+    try:
+        out = subprocess.check_output(["git", "status", "--porcelain", "--", "src", "scripts", "configs",
+                                       ":!configs/queue.txt"], text=True)
+        return str(bool(out.strip())).lower()
+    except Exception:
+        return "unknown"
+
+
+def init_from_saved_model(model: HandIDModule, path: str) -> None:
+    """Start from the backbone + embedding head of an earlier run (``save_model=true``), e.g. stage 2
+    of the HaGRID pre-training (issue #8). The ArcFace class centres are not copied: the classes of
+    the new training set are different people, so they start from scratch as usual."""
+    state_dict = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
+    model.net.load_state_dict(state_dict, strict=True)
+    print(f"initialised backbone + head from {path}")
+
+
 @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed)
@@ -67,7 +87,8 @@ def main(cfg: DictConfig) -> None:
     # ---- data -------------------------------------------------------------------------------
     manifests, banks = load_manifests(cfg.paths.manifest_dir, cfg.paths.bank_dir, cfg.input.name,
                                       cfg.paths.aligned_dir)
-    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold, cfg.variant.labels)
+    uses_hagrid = "hagrid" in cfg.variant.datasets or "hagrid" in str(cfg.model.get("init_from") or "")
+    train_df, test_sets = split_train_test(manifests, cfg.variant.datasets, cfg.fold, cfg.variant.labels, uses_hagrid)
     print(describe(train_df, test_sets))
 
     # ---- logging ----------------------------------------------------------------------------
@@ -76,7 +97,7 @@ def main(cfg: DictConfig) -> None:
                           tracking_uri=cfg.mlflow.tracking_uri,
                           tags={"variant": cfg.variant.name, "model": cfg.model.name, "input": cfg.input.name,
                                 "fold": str(cfg.fold),
-                                "git_commit": git_commit()})
+                                "git_commit": git_commit(), "git_dirty": git_dirty()})
     logger.log_hyperparams(flatten(OmegaConf.to_container(cfg.train), "train")
                            | {f"model/{k}": v for k, v in cfg.model.items()}
                            | {"variant/datasets": ",".join(cfg.variant.datasets), "fold": cfg.fold,
@@ -84,18 +105,26 @@ def main(cfg: DictConfig) -> None:
                               "n_train_images": len(train_df), "n_train_classes": train_df["label"].nunique()})
 
     # ---- model + training -------------------------------------------------------------------
+    use_metadata = cfg.variant.get("metadata", False)
     m = cfg.model
     model = HandIDModule(num_classes=train_df["label"].nunique(), backbone=m.backbone,
                          embedding_dim=m.embedding_dim, arcface_scale=m.arcface_scale,
                          arcface_margin=m.arcface_margin, lr_backbone=m.lr_backbone, lr_head=m.lr_head,
                          weight_decay=m.weight_decay, warmup_epochs=m.warmup_epochs, layer_decay=m.layer_decay,
-                         timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None)
+                         timm_kwargs=OmegaConf.to_container(m.timm_kwargs, resolve=True) if m.get("timm_kwargs") else None,
+                         metadata_classes={a: len(c) for a, c in METADATA.items()} if use_metadata else None,
+                         metadata_weight=cfg.variant.get("metadata_weight", 0.1),
+                         pooling=m.get("pooling", "global"), grid=m.get("grid", 4))
+    if m.get("init_from"):
+        init_from_saved_model(model, m.init_from)
     if cfg.train.epochs > 0:
+        metadata = metadata_targets(train_df, Path(cfg.paths.external_dir) / "11k" / "HandInfo.csv") \
+            if use_metadata else None
         data = HandDataModule(train_df, banks, cfg.train.image_size, cfg.train.batch_size, cfg.train.num_workers,
-                              cfg.train.balance_power)
+                              cfg.train.balance_power, metadata)
         trainer = L.Trainer(max_epochs=cfg.train.epochs, precision=cfg.train.precision, logger=logger,
                             enable_checkpointing=False, log_every_n_steps=20, default_root_dir=out_dir,
-                            gradient_clip_val=1.0)
+                            gradient_clip_val=1.0, limit_train_batches=cfg.train.limit_train_batches)
         trainer.fit(model, datamodule=data)
     if cfg.save_model:
         torch.save({"state_dict": model.net.state_dict(), "config": OmegaConf.to_container(cfg, resolve=True)},

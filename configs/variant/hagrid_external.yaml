@@ -1,0 +1,8 @@
+# @package _global_
+# Stage 1 of issue #8: pre-train on HaGRID (dorsal gestures, ~12k users) + 11k + HD; never sees our data,
+# so every fold of ours is a test set (the value of `fold` does not matter, keep fold=0).
+# Run with save_model=true: stage 2 (model=dinov3_vitb_hagrid) starts from its model.pt.
+variant:
+  name: hagrid_external
+  labels: identity
+  datasets: [hagrid, 11k, hd]

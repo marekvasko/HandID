@@ -31,10 +31,82 @@ REPORTS = ROOT / "reports"
 FIGS = REPORTS / "figures"
 
 # Fixed order and colour per system (colour follows the system, never its rank).
-VARIANT_ORDER = ["zero_shot", "external_only", "ours_only", "ours_external"]
+VARIANT_ORDER = ["zero_shot", "external_only", "hagrid_external", "ours_sessions", "ours_sessions_external", "ours_only",
+                 "ours_external", "ours_external_meta"]
 VARIANT_LABEL = {"zero_shot": "Zero-shot (no training)", "external_only": "Trained on 11k + HD",
-                 "ours_only": "Trained on ours", "ours_external": "Trained on ours + 11k + HD"}
-PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+                 "ours_only": "Trained on ours", "ours_external": "Trained on ours + 11k + HD",
+                 "ours_sessions": "Ours, session labels only",
+                 "ours_sessions_external": "Ours session labels + 11k + HD",
+                 "ours_external_meta": "Ours + 11k + HD + metadata heads",
+                 "hagrid_external": "Trained on HaGRID + 11k + HD"}
+MODEL_LABEL = {"dinov3_vitb": "DINOv3 ViT-B", "dinov3_vitb_masked": "DINOv3 ViT-B, background masked",
+               "dinov3_vitl": "DINOv3 ViT-L", "clip_vitb": "CLIP ViT-B", "siglip2_vitb": "SigLIP 2 ViT-B",
+               "dinov3_convnext_b": "DINOv3 ConvNeXt-B", "resnet50_in1k": "ResNet-50 (IN-1k)",
+               "efficientnet_b3_in1k": "EfficientNet-B3 (IN-1k)", "convnext_b_in22k": "ConvNeXt-B (IN-22k)",
+               "clip_vitl_laion": "CLIP ViT-L/14 (LAION-2B)", "clip_vith_laion": "CLIP ViT-H/14 (LAION-2B)",
+               "convnext_b_clip_laion": "CLIP ConvNeXt-B (LAION-2B)",
+               "convnext_xxl_clip_laion": "CLIP ConvNeXt-XXL (LAION-2B)",
+               "dinov3_convnext_b_parts_mean": "DINOv3 ConvNeXt-B, parts + mean",
+               "dinov3_convnext_b_parts_transformer": "DINOv3 ConvNeXt-B, parts + transformer",
+               "resnet50_in1k_parts_mean": "ResNet-50, parts + mean",
+               "resnet50_in1k_parts_transformer": "ResNet-50, parts + transformer",
+               "dinov3_vitb_hagrid": "DINOv3 ViT-B, HaGRID pre-trained"}
+PALETTE = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+# Systems of the main Task 1 report (the core question: which training data?)
+MAIN_SYSTEMS = [("zero_shot", "dinov3_vitb"), ("external_only", "dinov3_vitb"), ("ours_only", "dinov3_vitb"),
+                ("ours_external", "dinov3_vitb")]
+
+# One comparison report per idea / GitHub issue. The first system is the reference for paired deltas.
+IDEAS = {
+    "backbones": dict(issue=2, title="Backbones: CLIP and SigLIP vs DINOv3",
+                      question="How much does the pre-trained backbone matter? Are image-text models (CLIP, "
+                               "SigLIP 2) a good starting point for hand biometrics?",
+                      systems=[("ours_external", "dinov3_vitb"), ("zero_shot", "dinov3_vitb"), ("zero_shot", "clip_vitb"),
+                               ("zero_shot", "siglip2_vitb"), ("ours_external", "clip_vitb"),
+                               ("ours_external", "siglip2_vitb"), ("ours_external", "dinov3_convnext_b")]),
+    "session_only": dict(issue=3, title="Session-only supervision",
+                         question="Can we learn to recognise people if we never label which sessions belong to "
+                                  "the same person (every session = its own class)?",
+                         systems=[("ours_sessions_external", "dinov3_vitb"), ("external_only", "dinov3_vitb"),
+                                  ("ours_sessions", "dinov3_vitb"), ("ours_only", "dinov3_vitb"),
+                                  ("ours_external", "dinov3_vitb")]),
+    "masking": dict(issue=4, title="Background masking",
+                    question="Is the gap between same-session and cross-session performance caused by the "
+                             "background?",
+                    systems=[("ours_external", "dinov3_vitb"), ("ours_external", "dinov3_vitb_masked")]),
+    "metadata": dict(issue=5, title="Metadata as auxiliary targets",
+                     question="Does predicting 11k metadata (gender, skin colour, accessories, nail polish, age) "
+                              "from the embedding help identification?",
+                     systems=[("ours_external", "dinov3_vitb"), ("ours_external_meta", "dinov3_vitb")]),
+    "classic_cnns": dict(issue=9, title="Classic ImageNet CNNs",
+                         question="How do supervised ImageNet CNNs (ResNet, EfficientNet, ConvNeXt) compare with "
+                                  "modern self-supervised and image-text backbones?",
+                         systems=[("ours_external", "dinov3_vitb"), ("zero_shot", "resnet50_in1k"),
+                                  ("zero_shot", "convnext_b_in22k"), ("ours_external", "resnet50_in1k"),
+                                  ("ours_external", "efficientnet_b3_in1k"), ("ours_external", "convnext_b_in22k"),
+                                  ("ours_external", "dinov3_convnext_b")]),
+    "laion": dict(issue=10, title="Extremely large pre-training (LAION-2B)",
+                  question="Do OpenCLIP models trained on 2 billion image-text pairs give better hand features?",
+                  systems=[("ours_external", "dinov3_vitb"), ("zero_shot", "clip_vitb"),
+                           ("zero_shot", "convnext_b_clip_laion"), ("zero_shot", "clip_vitl_laion"),
+                           ("zero_shot", "clip_vith_laion"), ("zero_shot", "convnext_xxl_clip_laion"),
+                           ("ours_external", "convnext_b_clip_laion"), ("ours_external", "clip_vitl_laion")]),
+    "parts": dict(issue=11, title="Local part features fused by averaging or a transformer",
+                  question="Does keeping WHERE a feature was seen (a grid of local CNN features) and fusing the "
+                           "parts beat global pooling?",
+                  systems=[("ours_external", "dinov3_convnext_b"), ("ours_external", "dinov3_convnext_b_parts_mean"),
+                           ("ours_external", "dinov3_convnext_b_parts_transformer"), ("ours_external", "resnet50_in1k"),
+                           ("ours_external", "resnet50_in1k_parts_mean"),
+                           ("ours_external", "resnet50_in1k_parts_transformer")]),
+    "hagrid": dict(issue=8, title="HaGRID pre-training (12.7k extra identities)",
+                   question="Do 12.7k extra identities from a gesture dataset improve cross-session recognition?",
+                   systems=[("ours_external", "dinov3_vitb"), ("external_only", "dinov3_vitb"),
+                            ("hagrid_external", "dinov3_vitb"), ("ours_external", "dinov3_vitb_hagrid")]),
+    "vitl": dict(issue=6, title="Strongest system: DINOv3 ViT-L",
+                 question="Does a 3.5x larger backbone with a longer schedule improve cross-session recognition?",
+                 systems=[("ours_external", "dinov3_vitb"), ("ours_external", "dinov3_vitl")]),
+}
 INK, MUTED, GRID = "#1f2328", "#59636e", "#d8dee4"
 
 plt.rcParams.update({
@@ -66,13 +138,15 @@ def collect(outputs: Path) -> dict[tuple[str, str], dict]:
 
 def label(system: tuple[str, str]) -> str:
     variant, model = system
-    return f"{VARIANT_LABEL.get(variant, variant)} · {model}"
+    return f"{VARIANT_LABEL.get(variant, variant)} · {MODEL_LABEL.get(model, model)}"
 
 
 SHORT_VARIANT = {"zero_shot": "zero-shot", "external_only": "11k+HD", "ours_only": "ours",
-                 "ours_external": "ours+11k+HD"}
+                 "ours_external": "ours+11k+HD", "ours_sessions": "ours\nsessions",
+                 "ours_sessions_external": "ours sessions\n+11k+HD", "ours_external_meta": "ours+11k+HD\n+meta",
+                 "hagrid_external": "HaGRID\n+11k+HD"}
 SHORT_MODEL = {"dinov3_vitb": "", "dinov3_vitb_masked": "\nmasked", "dinov3_vitl": "\nViT-L",
-               "dinov3_vitl_masked": "\nViT-L masked"}
+               "clip_vitb": "\nCLIP", "siglip2_vitb": "\nSigLIP 2", "dinov3_convnext_b": "\nConvNeXt"}
 
 
 def short_label(system: tuple[str, str]) -> str:
@@ -105,6 +179,23 @@ def pooled_scores(sys: dict, protocol: str) -> tuple[np.ndarray, np.ndarray, np.
             continue
         s.append(z[f"{key}|score"]); g.append(z[f"{key}|genuine"]); w.append(z[f"{key}|weight"])
     return np.concatenate(s), np.concatenate(g), np.concatenate(w)
+
+
+def restrict(systems: dict, wanted: list[tuple[str, str]]) -> tuple[dict, list[str]]:
+    """Keep the wanted systems that exist, and only the folds that ALL of them were evaluated on."""
+    present = {k: systems[k] for k in wanted if k in systems and systems[k]["ours"]}
+    if not present:
+        return {}, []
+    folds = sorted(set.intersection(*(set(v["ours"]) for v in present.values())), key=lambda f: int(f.split("_")[1]))
+    out = {k: {"ours": {f: v["ours"][f] for f in folds}, "scores": {f: v["scores"][f] for f in folds},
+               "external": v["external"]} for k, v in present.items()}
+    return out, folds
+
+
+def paired_delta(sys: dict, ref: dict, protocol: str = "image_cross_session") -> str:
+    """Mean ± std over folds of (system EER - reference EER), in percentage points."""
+    d = fold_values(sys, protocol, "eer") - fold_values(ref, protocol, "eer")
+    return "reference" if np.allclose(d, 0) else f"{d.mean() * 100:+.1f} ± {d.std() * 100:.1f}"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -195,6 +286,28 @@ def md_table(df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def label_audit_section() -> str:
+    f = REPORTS / "label_audit_summary.json"
+    if not f.exists():
+        return ""
+    a = json.loads(f.read_text())
+    return f"""### Label audit
+
+Two independent checks of the session labels (`scripts/audit_sessions.py`):
+
+* **Model-based.** Every session is compared with the other sessions of the same hand by a model
+  that never saw that person (`ours_only`, held-out fold). {a['model_flag_no_match_at_far1pct']} of
+  {a['sessions_of_hands_with_2plus_sessions']} sessions do not reach the 1 %-FAR threshold against their own hand,
+  {a['model_flag_other_side_closer']} are closer to the person's other hand and {a['model_flag_other_person_closer']} to another
+  person. At ~14 % cross-session EER this mostly measures the model, not label errors.
+* **Geometric.** After canonicalisation every hand must look like a right hand (thumb left of the
+  little finger, MediaPipe). {a['images_canonical_ok_pct']} % of images pass, {a['images_wrong_side_pct']} % fail,
+  {a['images_undetected_pct']} % undetected. **{a['sessions_side_swapped']} sessions ({a['people_with_side_swapped_session']} people) were stored under the wrong
+  hand**; they are corrected in `configs/label_fixes.yaml` and all results use the corrected labels.
+  Only {a['other_side_closer_flags_confirmed_by_geometry']} of the model's "other hand is closer" flags was a real swap.
+"""
+
+
 def data_report(m: dict[str, pd.DataFrame]) -> str:
     rows = []
     for ds, df in m.items():
@@ -243,6 +356,8 @@ No example images are included in this repository to protect participants' priva
   Evaluation therefore weights every hand equally (see Task 1 report).
 
 ![Sessions per hand](figures/sessions_per_hand.png)
+
+{label_audit_section()}
 
 ### Folds
 
@@ -323,7 +438,7 @@ each fold scored by the model that did not see it:
 def task2_report(systems: dict) -> str:
     rows = []
     for i, (system, sys) in enumerate(systems.items()):
-        row = {"#": i + 1, "System": label(system)}
+        row = {"#": i + 1, "System": label(system), "Folds (ours)": len(sys["ours"])}
         for name, short in [("11k/test", "11k"), ("hd/test", "HD")]:
             runs = sys["external"].get(name, [])
             row[f"{short} EER"] = mean_std(np.array([r["image_all"]["eer"] for r in runs]))
@@ -364,11 +479,102 @@ Mean ± std is over the runs (one model per held-out fold of our data).
 """
 
 
+def mlflow_runs(tracking_uri: str, experiment: str) -> dict[tuple[str, str, str], dict]:
+    """{(variant, model output dir, fold): {url, commit}} for the latest finished run of each."""
+    client = mlflow.MlflowClient(tracking_uri)
+    exp = client.get_experiment_by_name(experiment)
+    if exp is None:
+        return {}
+    runs = {}
+    for r in client.search_runs([exp.experiment_id], "attributes.status = 'FINISHED'", max_results=5000,
+                                order_by=["attributes.start_time ASC"]):
+        t = r.data.tags
+        if "variant" not in t:
+            continue
+        model_dir = t.get("model", "") + ("_masked" if t.get("input") == "masked" else "")
+        runs[(t["variant"], model_dir, t.get("fold", "0"))] = {
+            "url": f"{tracking_uri}/#/experiments/{exp.experiment_id}/runs/{r.info.run_id}",
+            "commit": t.get("git_commit", "?"), "name": r.info.run_name}
+    return runs
+
+
+def runs_section(systems: dict, folds: list[str], runs: dict, experiment_url: str) -> str:
+    """Markdown table linking every number above to the MLflow run that produced it."""
+    rows = []
+    for (variant, model), sys in systems.items():
+        trained_per_fold = (variant, model, folds[0].split("_")[1]) in runs and variant not in ("zero_shot", "external_only", "hagrid_external")
+        for f in (folds if trained_per_fold else ["fold_0"]):
+            run = runs.get((variant, model, f.split("_")[1]))
+            rows.append({"System": label((variant, model)),
+                         "Run": f"fold {f.split('_')[1]}" if trained_per_fold else "one run, all folds",
+                         "MLflow": f"[{run['name']}]({run['url']})" if run else "not found",
+                         "Commit": f"`{run['commit']}`" if run else "–"})
+    return f"""## Runs
+
+Every number above comes from these MLflow runs (experiment: [{experiment_url}]({experiment_url})).
+
+{md_table(pd.DataFrame(rows))}
+"""
+
+
+def external_cell(sys: dict, name: str, protocol: str, metric: str) -> str:
+    runs = sys["external"].get(name, [])
+    return mean_std(np.array([r[protocol][metric] for r in runs]))
+
+
+def experiment_report(key: str, idea: dict, systems: dict, conclusion: str, runs: dict,
+                      experiment_url: str) -> str:
+    subset, folds = restrict(systems, idea["systems"])
+    if not subset:
+        return f"# {idea['title']} (#{idea['issue']})\n\n_No results yet._\n"
+    ref = next(iter(subset.values()))
+    rows = []
+    for system, sys in subset.items():
+        rows.append({
+            "System": label(system),
+            "**EER cross-session**": mean_std(fold_values(sys, "image_cross_session", "eer")),
+            "Δ vs reference (paired)": paired_delta(sys, ref),
+            "TAR@FAR=1 % cross-session": mean_std(fold_values(sys, "image_cross_session", "tar@far=0.01")),
+            "EER session template": mean_std(fold_values(sys, "session_template", "eer")),
+            "EER same session": mean_std(fold_values(sys, "image_same_session", "eer")),
+            "Rank-1 (session)": mean_std(fold_values(sys, "rank1_session", "rank1")),
+            "11k EER": external_cell(sys, "11k/test", "image_all", "eer"),
+            "HD EER": external_cell(sys, "hd/test", "image_all", "eer"),
+        })
+    fig_det(subset, "image_cross_session", "Image vs image, different sessions", FIGS / f"exp_{key}_det.png")
+    fig_eer_dots(subset, FIGS / f"exp_{key}_eer_per_fold.png")
+    return f"""# {idea['title']}
+
+GitHub issue: #{idea['issue']}
+
+**Question.** {idea['question']}
+
+**Protocol.** Our dataset, people-disjoint folds {', '.join(f.split('_')[1] for f in folds)}
+(only folds that every system below was evaluated on, so the comparison is paired).
+EER / TAR in %, mean ± std over folds; *Δ vs reference* is the per-fold difference of the
+cross-session EER to the first row (negative = better). 11k / HD: subject-disjoint test splits
+(single session, so optimistic).
+
+{md_table(pd.DataFrame(rows))}
+
+![DET](../figures/exp_{key}_det.png)
+![EER per fold](../figures/exp_{key}_eer_per_fold.png)
+
+{conclusion}
+
+{runs_section(subset, folds, runs, experiment_url)}
+"""
+
+
 @hydra.main(config_path="../configs", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     FIGS.mkdir(parents=True, exist_ok=True)
     manifests = {ds: pd.read_csv(Path(cfg.paths.manifest_dir) / f"{ds}.csv", dtype=str) for ds in ("ours", "11k", "hd")}
-    systems = collect(ROOT / "outputs")
+    all_systems = collect(ROOT / "outputs")
+    runs = mlflow_runs(cfg.mlflow.tracking_uri, cfg.mlflow.experiment)
+    exp = mlflow.MlflowClient(cfg.mlflow.tracking_uri).get_experiment_by_name(cfg.mlflow.experiment)
+    experiment_url = f"{cfg.mlflow.tracking_uri}/#/experiments/{exp.experiment_id}" if exp else cfg.mlflow.tracking_uri
+    systems, _ = restrict(all_systems, MAIN_SYSTEMS)
     conclusions = json.loads((REPORTS / "conclusions.json").read_text()) if (REPORTS / "conclusions.json").exists() else {}
 
     fig_sessions_hist(manifests["ours"], FIGS / "sessions_per_hand.png")
@@ -380,14 +586,20 @@ def main(cfg: DictConfig) -> None:
     hd_test = manifests["hd"].query("split == 'test'").subject.nunique()
     (REPORTS / "data.md").write_text(data_report(manifests))
     (REPORTS / "task1_session_feasibility.md").write_text(
-        task1_report(systems).replace("{conclusion}", conclusions.get("task1", "")))
+        task1_report(systems).replace("{conclusion}", conclusions.get("task1", ""))
+        + "\n" + runs_section(systems, sorted({f for v in systems.values() for f in v["ours"]},
+                                               key=lambda f: int(f.split("_")[1])), runs, experiment_url))
+    (REPORTS / "experiments").mkdir(exist_ok=True)
+    for key, idea in IDEAS.items():
+        (REPORTS / "experiments" / f"{key}.md").write_text(
+            experiment_report(key, idea, all_systems, conclusions.get(key, ""), runs, experiment_url))
     (REPORTS / "task2_strong_system.md").write_text(
-        task2_report(systems).replace("{hd_test_people}", str(hd_test)).replace("{conclusion}", conclusions.get("task2", "")))
+        task2_report(all_systems).replace("{hd_test_people}", str(hd_test)).replace("{conclusion}", conclusions.get("task2", "")))
 
     mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
     mlflow.set_experiment(cfg.mlflow.experiment)
     with mlflow.start_run(run_name="report", tags={"kind": "report"}):
-        for i, (system, sys) in enumerate(systems.items()):
+        for system, sys in all_systems.items():
             for protocol in ("image_cross_session", "session_template"):
                 v = fold_values(sys, protocol, "eer")
                 if len(v):

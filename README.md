@@ -46,6 +46,23 @@ line, e.g. `uv run scripts/train.py variant=ours_only model=dinov3_vitl train.ep
 | ours | 87 people, both hands, many sessions, phone photos | private, not distributed |
 | 11k Hands | 190 people, dorsal + palmar (we use dorsal) | Afifi, *11K Hands*, MTAP 2019 |
 | PolyU HD | 714 people, right-hand dorsal | Kumar & Xu, IEEE TIFS 2016 |
+| HaGRID v2 (optional) | ~12k users, gestures `stop_inverted`, `peace_inverted`, `two_up_inverted` (back of the hand) | Kapitanov et al., HaGRID, WACV 2024 |
+
+### HaGRID pre-training (issue #8)
+
+HaGRID ships landmarks, so crops use them directly (no MediaPipe detection); it has no
+left/right label, the side is derived from geometry (`manifests.hagrid_side`). 10 % of the
+users are a subject-disjoint test set (`hagrid/test`), evaluated in every run once
+`data/manifests/hagrid.csv` exists.
+
+```bash
+uv run scripts/prepare_data.py datasets=[hagrid]                                   # manifest + crops
+uv run scripts/train.py variant=hagrid_external model=dinov3_vitb save_model=true  # stage 1 (never sees ours)
+uv run scripts/train.py -m variant=ours_external model=dinov3_vitb_hagrid fold=0,1,2,3,4  # stage 2
+```
+
+Stage 2 starts from `outputs/hagrid_external/dinov3_vitb/fold0/model.pt` (any saved model can
+be used with `model.init_from=/path/to/model.pt`).
 
 No images, manifests, embeddings or model weights are stored in this repository.
 See [AGENTS.md](AGENTS.md) for the privacy rules and coding conventions.

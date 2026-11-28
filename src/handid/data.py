@@ -10,17 +10,18 @@ Speed design (the CPU of the training machine is shared and slow):
 
 Which images are used for training is decided by the experiment *variant*:
 
-    datasets   any of [ours, 11k, hd]
+    datasets   any of [ours, 11k, hd, hagrid]
     labels     identity  -> class = one hand of one person (needs person labels across sessions)
                session   -> class = one capture session of our data (no person labels needed;
                             two sessions of the same person are treated as different classes)
 
 Test sets are always: every fold of our dataset not used for training, plus the
-subject-disjoint test splits of 11k and HD.
+subject-disjoint test splits of 11k and HD (and of HaGRID, once its manifest exists).
 """
 
 from __future__ import annotations
 
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -45,6 +46,18 @@ def _read(path: str) -> np.ndarray:
 
 def load_bank(paths: list[str], cache_file: Path) -> np.ndarray:
     """uint8 array (N, H, W, 3) with the images in ``paths`` order, memory-mapped from disk."""
+    # A bank is valid only for the exact list of images it was built from (row order matters).
+    # A fingerprint of that list is stored next to it; a re-prepared manifest (e.g. a label fix
+    # that renames 24 files but keeps the row count) triggers a rebuild.
+    fingerprint = hashlib.sha1("\n".join(paths).encode()).hexdigest()
+    fingerprint_file = cache_file.with_suffix(".paths.sha1")
+    stored = fingerprint_file.read_text().strip() if fingerprint_file.exists() else None
+    if cache_file.exists() and stored is not None and stored != fingerprint:
+        print(f"{cache_file.name} was built from a different manifest, rebuilding")
+        cache_file.unlink()
+    if cache_file.exists() and len(np.load(cache_file, mmap_mode="r")) != len(paths):
+        print(f"{cache_file.name} does not match its manifest (re-prepared?), rebuilding")
+        cache_file.unlink()
     if not cache_file.exists():
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         tmp = cache_file.with_suffix(".tmp.npy")
@@ -54,6 +67,9 @@ def load_bank(paths: list[str], cache_file: Path) -> np.ndarray:
                 bank[i] = img
         bank.flush()
         tmp.rename(cache_file)
+        fingerprint_file.write_text(fingerprint)
+    elif stored is None:  # bank built before fingerprints existed: adopt the current manifest
+        fingerprint_file.write_text(fingerprint)
     return np.load(cache_file, mmap_mode="r")
 
 
@@ -61,7 +77,9 @@ def load_manifests(manifest_dir: str, bank_dir: str, input_name: str, aligned_di
                    ) -> tuple[dict[str, pd.DataFrame], dict[str, np.ndarray]]:
     """Manifests (with a ``bank_row`` column) and the matching image banks."""
     manifests, banks = {}, {}
-    for ds in ("ours", "11k", "hd"):
+    for ds in ("ours", "11k", "hd", "hagrid"):
+        if ds == "hagrid" and not (Path(manifest_dir) / "hagrid.csv").exists():
+            continue  # optional dataset (scripts/prepare_data.py datasets=[hagrid])
         df = pd.read_csv(Path(manifest_dir) / f"{ds}.csv", dtype=str)
         if input_name == "masked":  # same crops, background removed (see align.hand_mask)
             df["path"] = df["path"].str.replace(aligned_dir, aligned_dir + "_masked", regex=False)
@@ -72,13 +90,17 @@ def load_manifests(manifest_dir: str, bank_dir: str, input_name: str, aligned_di
 
 
 class BankImages(Dataset):
-    """Rows of a manifest -> (transformed uint8 CHW image, class index). Class index is -1 for test data."""
+    """Rows of a manifest -> (transformed uint8 CHW image, class index, metadata targets).
+
+    Class index is -1 for test data; metadata targets are -1 where unknown (see METADATA).
+    """
 
     def __init__(self, df: pd.DataFrame, banks: dict[str, np.ndarray], transform: nn.Module,
-                 labels: list[int] | None = None):
+                 labels: list[int] | None = None, metadata: np.ndarray | None = None):
         self.banks, self.transform = banks, transform
         self.rows = list(zip(df["dataset"], df["bank_row"]))
         self.labels = labels if labels is not None else [-1] * len(df)
+        self.metadata = metadata if metadata is not None else np.full((len(df), len(METADATA)), -1)
 
     def __len__(self) -> int:
         return len(self.rows)
@@ -86,7 +108,37 @@ class BankImages(Dataset):
     def __getitem__(self, i: int):
         ds, row = self.rows[i]
         image = torch.from_numpy(np.array(self.banks[ds][row])).permute(2, 0, 1)  # uint8 C x H x W
-        return self.transform(image), self.labels[i]
+        return self.transform(image), self.labels[i], torch.from_numpy(self.metadata[i])
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Metadata (only 11k Hands has it) - used as auxiliary prediction targets, see issue #5
+# ---------------------------------------------------------------------------------------------
+METADATA = {  # attribute -> class names; 11k ages are mostly 21-22, hence the narrow bins
+    "gender": ["female", "male"],
+    "skinColor": ["very fair", "fair", "medium", "dark"],
+    "accessories": ["0", "1"],
+    "nailPolish": ["0", "1"],
+    "age": ["<=20", "21", "22", ">=23"],
+}
+
+
+def _age_bin(age: str) -> str:
+    a = int(age)
+    return "<=20" if a <= 20 else ">=23" if a >= 23 else str(a)
+
+
+def metadata_targets(df: pd.DataFrame, handinfo_csv: str) -> np.ndarray:
+    """(N, len(METADATA)) int64 class indices; -1 for rows without metadata (ours, hd)."""
+    info = pd.read_csv(handinfo_csv, dtype=str).set_index("imageName")
+    info["age"] = info["age"].map(_age_bin)
+    out = np.full((len(df), len(METADATA)), -1, dtype=np.int64)
+    is_11k = (df["dataset"] == "11k").to_numpy()
+    rows = info.loc[df.loc[is_11k, "src_path"].map(lambda p: Path(p).name)]
+    for k, (attr, classes) in enumerate(METADATA.items()):
+        out[is_11k, k] = rows[attr].map({c: i for i, c in enumerate(classes)}).fillna(-1).to_numpy()
+    return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -135,7 +187,8 @@ def to_float(images: torch.Tensor) -> torch.Tensor:
 # Splits
 # ---------------------------------------------------------------------------------------------
 def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[str], fold: int | None,
-                     labels: str = "identity") -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+                     labels: str = "identity", uses_hagrid: bool = False
+                     ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """Return (training rows with a ``label`` column, {test set name: rows})."""
     ours = manifests["ours"]
     held_out = f"fold_{fold}" if fold is not None else None
@@ -143,7 +196,7 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
     train_parts = []
     if "ours" in variant_datasets:
         train_parts.append(ours[ours.split != held_out])
-    for ds in ("11k", "hd"):
+    for ds in ("11k", "hd", "hagrid"):
         if ds in variant_datasets:
             train_parts.append(manifests[ds][manifests[ds].split == "train"])
     train = (pd.concat(train_parts) if train_parts else ours.iloc[:0]).reset_index(drop=True)
@@ -159,6 +212,10 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
         test[f"ours/{f}"] = ours[ours.split == f]
     for ds in ("11k", "hd"):
         test[f"{ds}/test"] = manifests[ds][manifests[ds].split == "test"]
+    # HaGRID's test split (7k images, 27 M pairs) is only evaluated for runs that use HaGRID, so the
+    # pre-defined test configuration of all other experiments stays unchanged (issue #8).
+    if "hagrid" in manifests and uses_hagrid:
+        test["hagrid/test"] = manifests["hagrid"][manifests["hagrid"].split == "test"]
     return train, test
 
 
@@ -167,9 +224,9 @@ def split_train_test(manifests: dict[str, pd.DataFrame], variant_datasets: list[
 # ---------------------------------------------------------------------------------------------
 class HandDataModule(L.LightningDataModule):
     def __init__(self, train_df: pd.DataFrame, banks: dict[str, np.ndarray], image_size: int, batch_size: int,
-                 num_workers: int, balance_power: float):
+                 num_workers: int, balance_power: float, metadata: np.ndarray | None = None):
         super().__init__()
-        self.train_df, self.banks = train_df, banks
+        self.train_df, self.banks, self.metadata = train_df, banks, metadata
         self.classes = sorted(train_df["label"].unique())
         self.class_index = {c: i for i, c in enumerate(self.classes)}
         self.image_size, self.batch_size, self.num_workers = image_size, batch_size, num_workers
@@ -177,7 +234,7 @@ class HandDataModule(L.LightningDataModule):
 
     def train_dataloader(self) -> DataLoader:
         labels = [self.class_index[c] for c in self.train_df["label"]]
-        ds = BankImages(self.train_df, self.banks, train_transform(self.image_size), labels)
+        ds = BankImages(self.train_df, self.banks, train_transform(self.image_size), labels, self.metadata)
         # Each image is drawn with probability ~ 1 / n_images(class)^power.
         # power=0: plain shuffling, power=1: every class equally often. 0.5 is a compromise
         # that keeps heavily recorded hands from dominating without over-sampling tiny ones.
@@ -187,8 +244,8 @@ class HandDataModule(L.LightningDataModule):
                           pin_memory=True, drop_last=True, persistent_workers=True)
 
     def on_after_batch_transfer(self, batch, dataloader_idx: int):
-        images, labels = batch
-        return to_float(images), labels
+        images, labels, metadata = batch
+        return to_float(images), labels, metadata
 
 
 def eval_loader(df: pd.DataFrame, banks: dict[str, np.ndarray], image_size: int, batch_size: int,

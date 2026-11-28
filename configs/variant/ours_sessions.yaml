@@ -1,0 +1,6 @@
+# @package _global_
+# Our data WITHOUT person labels: every capture session is its own class.
+variant:
+  name: ours_sessions
+  labels: session
+  datasets: [ours]
